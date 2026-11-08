@@ -312,20 +312,17 @@ impl SdrRemoteApp {
         ui.add_space(4.0);
 
         // Status
-        let olive_green = Color32::from_rgb(120, 160, 40);
         let state_text: String = match self.tuner_state {
             1 => rust_i18n::t!("dev_tuning").to_string(),
             2 => rust_i18n::t!("dev_tune_ok").to_string(),
             3 => rust_i18n::t!("dev_timeout").to_string(),
             4 => rust_i18n::t!("dev_aborted").to_string(),
-            5 => rust_i18n::t!("dev_done_already_tuned").to_string(),
             _ => rust_i18n::t!("dev_idle").to_string(),
         };
         let state_color = match self.tuner_state {
             1 => Color32::from_rgb(60, 120, 220),
             2 => Color32::from_rgb(50, 180, 50),
             3 | 4 => amber,
-            5 => olive_green,
             _ => Color32::GRAY,
         };
         ui.horizontal(|ui| {
@@ -337,13 +334,12 @@ impl SdrRemoteApp {
 
         // Tune button
         let can_start = self.tuner_connected && self.tuner_can_tune
-            && (self.tuner_state == 0 || self.tuner_state == 2 || self.tuner_state == 5);
+            && (self.tuner_state == 0 || self.tuner_state == 2);
         let (tune_color, tune_text): (Color32, String) = match self.tuner_state {
             1 => (Color32::from_rgb(60, 120, 220), rust_i18n::t!("dev_tuning").to_string()),
             2 => (Color32::from_rgb(50, 180, 50), rust_i18n::t!("dev_tune_ok").to_string()),
             3 => (amber, rust_i18n::t!("dev_tune_x").to_string()),
             4 => (amber, rust_i18n::t!("dev_tune_x").to_string()),
-            5 => (olive_green, rust_i18n::t!("dev_tune_tilde").to_string()),
             _ => (Color32::from_rgb(80, 80, 80), rust_i18n::t!("dev_tune").to_string()),
         };
         ui.horizontal(|ui| {

@@ -36,6 +36,27 @@ pub const DEFAULT_THRESHOLD_V: f32 = 2.25;
 /// Default hysteresis around the threshold, in volts. With the default 2.25 V
 /// switch level this gives active < 2.00 V and idle > 2.50 V.
 pub const DEFAULT_HYSTERESIS_V: f32 = 0.50;
+/// Upper bound for the minimum press: how long the start button stays down,
+/// counted from the press. The button is never released before the tuner's
+/// ACK; 0 releases it on the ACK itself.
+pub const MIN_PRESS_MAX_MS: u32 = 2000;
+/// Default minimum press. Right after power-on a JC-Control needs a press of
+/// about a quarter second: in a field test (2026-11-06) every release
+/// at 0.16 to 0.21 s failed and every release at 0.26 s worked. 400 ms leaves
+/// margin.
+pub const DEFAULT_MIN_PRESS_MS: u32 = 400;
+/// Default "tuned below" level on the yellow wire (V). A JC-Control rests
+/// around 5 V after power-on and clearly lower after a tune that really tuned
+/// (around 3.3 V on a JC-4s that was measured; the level depends on the tuner and the
+/// wiring), so a return to idle that settles above this level was not a tune.
+/// 0 = no check.
+pub const DEFAULT_TUNED_BELOW_V: f32 = 4.5;
+/// Upper bound for the "tuned below" level (V), under the reachable 6.6 V.
+pub const TUNED_BELOW_MAX_V: f32 = 6.0;
+/// Upper bound for the minimum tune time: a return to idle before this much
+/// time since the start of the press is not taken as "tune complete".
+/// 0 (the default) believes the first return to idle.
+pub const MIN_TUNE_MAX_MS: u32 = 10000;
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -85,6 +106,15 @@ pub struct DebugSnapshot {
     /// actually trigger (e.g. threshold 0.5 V + hysteresis 2.0 V -> requested
     /// active edge at -0.5 V, unreachable).
     pub edges_clamped: bool,
+    /// Minimum press of the start button, counted from the press (ms).
+    /// Persisted per-tuner via `tuner<N>_min_press_ms`.
+    pub min_press_ms: u32,
+    /// Minimum time since the press before an idle edge counts as tune
+    /// complete (ms). Persisted per-tuner via `tuner<N>_min_tune_ms`.
+    pub min_tune_ms: u32,
+    /// Level the yellow wire must settle under after a tune for it to count as
+    /// tuned (V); 0 = no check. Persisted per-tuner via `tuner<N>_tuned_below_v`.
+    pub tuned_below_v: f32,
 }
 
 struct Inner {
@@ -100,6 +130,9 @@ struct Inner {
     last_adc_at: Option<Instant>,
     threshold_v: f32,
     hysteresis_v: f32,
+    min_press_ms: u32,
+    min_tune_ms: u32,
+    tuned_below_v: f32,
 }
 
 impl Inner {
@@ -113,6 +146,9 @@ impl Inner {
             last_adc_at: None,
             threshold_v: DEFAULT_THRESHOLD_V,
             hysteresis_v: DEFAULT_HYSTERESIS_V,
+            min_press_ms: DEFAULT_MIN_PRESS_MS,
+            min_tune_ms: 0,
+            tuned_below_v: DEFAULT_TUNED_BELOW_V,
         }
     }
 
@@ -262,13 +298,40 @@ impl Mcp2221Debug {
             threshold_active_v,
             threshold_idle_v,
             edges_clamped,
+            min_press_ms: g.min_press_ms,
+            min_tune_ms: g.min_tune_ms,
+            tuned_below_v: g.tuned_below_v,
         }
+    }
+
+    /// Set the "tuned below" level (V), clamped to [0, TUNED_BELOW_MAX_V].
+    /// 0 switches the check off.
+    pub fn set_tuned_below_v(&self, v: f32) {
+        let mut g = self.inner.lock().expect("mcp bridge mutex poisoned");
+        g.tuned_below_v = v.clamp(0.0, TUNED_BELOW_MAX_V);
+    }
+
+    /// Yellow-wire voltage for a raw ADC value, for log lines.
+    pub fn yellow_v(raw: u16) -> f32 {
+        raw_to_yellow_v(raw)
+    }
+
+    /// Set the minimum press (ms), clamped to [0, MIN_PRESS_MAX_MS].
+    pub fn set_min_press_ms(&self, ms: u32) {
+        let mut g = self.inner.lock().expect("mcp bridge mutex poisoned");
+        g.min_press_ms = ms.min(MIN_PRESS_MAX_MS);
+    }
+
+    /// Set the minimum tune time (ms), clamped to [0, MIN_TUNE_MAX_MS].
+    pub fn set_min_tune_ms(&self, ms: u32) {
+        let mut g = self.inner.lock().expect("mcp bridge mutex poisoned");
+        g.min_tune_ms = ms.min(MIN_TUNE_MAX_MS);
     }
 
     /// Set the switch threshold on the yellow wire (volts). Clamped to
     /// [0.5, 4.5] so the slider can't accidentally produce a value the ADC
     /// could never reach (Vref * divider_ratio = 6.6 V at full scale, but
-    /// the JC-Control idle level is ~4.5 V and never higher).
+    /// the JC-Control idle level is around 5 V at most).
     pub fn set_threshold_v(&self, v: f32) {
         let mut g = self.inner.lock().expect("mcp bridge mutex poisoned");
         g.threshold_v = v.clamp(0.5, 4.5);

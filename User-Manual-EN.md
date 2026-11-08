@@ -1,4 +1,4 @@
-# ThetisLink v2.13.1: User Manual
+# ThetisLink v2.13.2: User Manual
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.13.1.apk` | Android client app |
+| `ThetisLink-2.13.2.apk` | Android client app |
 | `Installatie.md`, `Installatie.pdf` | Installation guide (Dutch) |
 | `User-Manual.md`, `User-Manual.pdf` | User manual (Dutch) |
 | `Technische-Referentie.md`, `Technische-Referentie.pdf` | Technical reference (Dutch) |
@@ -657,7 +657,7 @@ Since **v2.6.0** the **server GUI** is multilingual too (EN/NL/DE/FR): pick the 
 
 ### Amplitec 6/2 Antenna Switch
 
-Serial USB connection (19200 baud). Displays:
+Serial USB connection (19200 baud). Pull the USB cable and put it back, or start the server with the device off, and the server finds it again by itself (it tries every 5 s); no restart needed. This holds for the same COM port: in another USB socket Windows may give the device another number, and then that number has to be set in the settings and the server restarted. Displays:
 - Current switch position port A and B
 - 6 antenna positions with configurable labels
 - Switch buttons per port
@@ -673,7 +673,7 @@ The server supports **up to six physical tuners in parallel**, each via its own 
 
 **Hardware wiring (per tuner):**
 - **GP2** → through a gate resistor to the gate (2N7000) or base (MMBT3904) of a transistor; on `HIGH` the transistor pulls the **grey "start" wire** of the JC-Control to GND (mechanically equivalent to pressing the start button).
-- **GP1** → ADC input on the midpoint of a **1 MΩ + 1 MΩ 1:1 voltage divider** on the **yellow "tune-status" wire**. Idle ≈ 4.5 V, tune-active ≈ 0 V; the high impedance does not appreciably load the JC-Control LED circuit.
+- **GP1** → ADC input on the midpoint of a **1 MΩ + 1 MΩ 1:1 voltage divider** on the **yellow "tune-status" wire**. Tune-active ≈ 0 V; at rest around 5 V after power-on and clearly lower after a tune that really tuned (around 3.3 V on a JC-4s that was measured; the level depends on the tuner and the wiring); the high impedance does not appreciably load the JC-Control LED circuit.
 - **GND** → common ground with the JC-Control.
 - The full schematic (with both 2N7000 and MMBT3904 variants) lives in the technical reference.
 
@@ -689,18 +689,23 @@ The server supports **up to six physical tuners in parallel**, each via its own 
 - **Live:** current voltage on the yellow wire (V, post-divider).
 - **Threshold** slider (0.5–4.5 V, default 2.25 V): the switch level on the yellow wire.
 - **Hysteresis** slider (0.1–2.0 V, default 0.50 V): dead band around the threshold to reject transient noise.
-- **Edges:** the derived edges (`active < … V`, `idle > … V`). When the combination is impossible (e.g. threshold 0.5 V + hysteresis 2.0 V → active < 0 V) an amber **clamped** warning (with a warning sign) appears with a hover tip explaining the combo will never trigger: reduce the hysteresis or move the threshold away from the boundary.
+- **Min press** (0–2000 ms, default 400 ms): the start button stays pressed at least this long, counted from the press, and never less than until the tuner acknowledges it. Right after power-on a JC-Control needs a press of about a quarter second.
+- **Min tune time** (0–10000 ms, default 0): how long after the press a return to idle may count as the end of the tune. It only delays, it does not judge.
+- **Tuned below** (0–6.0 V, default 4.5 V): after a tune the yellow wire must settle under this level, or the tune counts as failed. 0 = no check. To pick it for your own tuner, read **Live** once right after power-on and once after a tune that really tuned, and set **Tuned below** between the two; if they are not clearly apart, set 0. Each of these three has a field next to its slider for an exact value.
+- **Edges:** the derived edges (`active < … V`, `idle > … V`). When the combination is impossible (e.g. threshold 0.5 V + hysteresis 2.0 V → active < 0 V) an amber **clamped** warning (with a warning sign) appears with a hover tip explaining the combo will never trigger: reduce the hysteresis or move the threshold away from the boundary. Keep the active edge below the level the wire rests at after a tune: above it, every tune after a successful one is refused (step 0 below).
 
 **Tune sequence (per tuner):**
+
+0. If the yellow wire is already below the active edge before the press (the tuner is off, it then reads near 0 V, or busy), nothing happens: no press, no carrier, status **Timeout**.
 1. PA standby (SPE/RF2K) if either is in Operate.
 2. GP2 HIGH (start asserted) and wait for the yellow wire to drop below the active edge = tuner ACK.
-3. GP2 LOW (start released).
+3. GP2 LOW (start released) once the press has lasted **Min press**.
 4. Thetis carrier ON (`ZZTU1;`).
-5. Wait for the yellow wire to return above the idle edge = tune complete.
-6. Thetis carrier OFF (`ZZTU0;`).
+5. Wait for the yellow wire to return above the idle edge = tune complete (not sooner than **Min tune time** after the press).
+6. Thetis carrier OFF (`ZZTU0;`), then 300 ms for the wire to settle: at or above **Tuned below** the tuner did not tune (status **Timeout**), below it the tune is OK.
 7. PA back to Operate.
 
-A timeout fires if the tuner does not ACK within 3 s after GP2 HIGH (status **Timeout**), or if the tune cycle does not complete within 30 s (idem). **Abort** breaks the cycle and forces GP2 back to LOW. A single ADC poll is rate-limited to 100 ms per board; the tuner thread explicitly checks the sample timestamp to avoid double-counting rate-limited cached samples.
+A timeout fires if the tuner does not ACK within 3 s after GP2 HIGH (status **Timeout**), if the tune cycle does not complete within 30 s, if the tuner did not tune (step 6), or if it was not ready (step 0; all status **Timeout**). A **Tune OK** goes back to idle when the yellow wire later rests at or above **Tuned below** again (with **Tuned below** above 0), as it does after the tuner was switched off and on again. **Abort** breaks the cycle and forces GP2 back to LOW. A single ADC poll is rate-limited to 100 ms per board; the tuner thread explicitly checks the sample timestamp to avoid double-counting rate-limited cached samples.
 
 **USB auto-reconnect:** once a bridge has been "Connected" at least once and the link drops afterwards (cable unplugged, sleep mode, hub reset, …), the tuner thread retries the open every 5 s on its own. A successful reconnect resets the timer so a subsequent drop is retried immediately: no server restart needed.
 
@@ -783,7 +788,7 @@ Thetis or one of the radios.
 
 ### SPE Expert 1.3K-FA
 
-Serial USB connection. Displays:
+Serial USB connection. Pull the USB cable and put it back, or start the server with the device off, and the server finds it again by itself (it tries every 5 s); no restart needed. This holds for the same COM port: in another USB socket Windows may give the device another number, and then that number has to be set in the settings and the server restarted. Only a lost port is opened again: an amplifier that is off but on USB keeps its port, because opening the port can move RTS and an RTS pulse switches the amplifier on. Displays:
 - Power, SWR, temperature
 - Antenna selection
 - Operate/Standby status
@@ -815,7 +820,7 @@ The RF2K-S can be reset via the server UI when needed.
 
 ### UltraBeam RCU-06
 
-Serial USB connection (19200 baud). Functions:
+Serial USB connection (19200 baud). Pull the USB cable and put it back, or start the server with the device off, and the server finds it again by itself (it tries every 5 s); no restart needed. This holds for the same COM port: in another USB socket Windows may give the device another number, and then that number has to be set in the settings and the server restarted. Functions:
 - **Frequency display** with band indication
 - **Direction buttons:** Normal, 180 degrees, Bi-Dir
 - **Frequency step buttons:** -100, -50, -25, +25, +50, +100 kHz
@@ -1086,6 +1091,25 @@ also shows the compressor timing, **Attack** and **Release**. **Flat** puts all 
 their starting point (saved only when you press Save). Each profile remembers whether the
 checkbox is on. The EQ works at the microphone's real rate; on a 16 kHz microphone the curve holds
 up to about 3 kHz. The phone has the five bands.
+
+**Transmit spectrum (desktop, Yaesu).** Below the EQ panel, **Transmit spectrum** shows what the
+Opus encoder takes: after the gain, EQ, compressor, AGC and limiter, the same point as the level
+meter, at 16 kHz. **Live** is one FFT of the last 128 ms (2048 points, 7.8 Hz per bin), about 20
+times a second while you transmit; after you release it stays on the last 128 ms, which with a
+roger beep on is that beep. **Last over** is the average spectrum of the whole last
+transmission (a roger beep left out, a played WAV counted), and stays after you release; **Peak
+hold** is its highest level per frequency. **EQ** draws the response of the EQ that sounds, on
+its own scale at the right (flat with the EQ off). A played WAV goes on the air without the EQ,
+compressor and AGC, so over a WAV it says "EQ: not on a WAV" instead of the curve. Choose
+**4 kHz** or **8 kHz** for the axis; **Log** (on by default) gives a logarithmic frequency axis
+from 50 Hz, off a linear one from 0 Hz.
+Drag the strip under the plot to make it taller or lower. With the pointer over the plot you see
+the frequency and level at that spot, and the level of each line there, as it is drawn. Levels are
+dBFS: a full-scale sine reads 0 dB. Transmitting on both Yaesus at once, the audio comes from the
+chain of Yaesu 2 and shows only in its spectrum. The copy is made only while the spectrum is on
+screen (a closed window or a folded EQ panel counts as closed), and the transmit path never waits
+for it. Unticking it, or opening the window or panel again after it was closed for a second or
+more, clears the plot.
 
 **A profile or preset carries the chain.** A Yaesu EQ profile on the desktop keeps the EQ, the mic
 gain, the compressor (with attack and release) and the AGC; choosing a profile sets them all. On
@@ -1405,6 +1429,7 @@ If the spectrum (line) and the waterfall are not in sync when panning, restart t
 
 | Version | Highlights |
 |---|---|
+| **2.13.2** | **The transmit spectrum of a Yaesu, a tuner that says when it did not tune, and serial devices that come back.** The desktop client shows the transmit spectrum of a Yaesu in its EQ section: what the encoder really sends, live and as the average of the last over, with the EQ curve over it. A StockCorner tuner on an MCP2221A gets its first tune after power-on right, reports a tune that did not tune as failed (**Tuned below**, 4.5 V by default, 0 = off), and is not pressed while it is off. The UltraBeam and the SPE Expert come back by themselves after a re-plugged USB cable or when they are switched on after the server. Works with 2.13.1, in both directions. |
 | **2.13.1** | **A direct connection outlives the relay, the transmit gain is set in dB, and Windows needs nothing extra.** A connection found through the relay that runs straight (D+R, L+R) carries on when the relay goes away; the R turns red. A Yaesu transmits with 120 ms of lead (was 80 ms). No Visual C++ Redistributable needed. One server per PC; the server signs in at the relay only once it has its port. The server keeps the previous run's log, and a problem report takes it along. The transmit gain is set in dB at the front of the chain, with a limiter at -1 dB; a Yaesu EQ profile or phone preset carries the mic gain, compressor and AGC; an advanced twenty-channel EQ on the desktop; a CLIP lamp. A Yaesu recording gets the receive correction too; a server setting for Yaesu receive levels set by the installation guide (radios and setting only once the server and every client run 2.13.1). The PDF manuals are back. One spectrum panel for every window, a VRX AGC that follows its receiver, a Fill field, a finer pan and VRX width at high zoom, and the FFT size only from a client that looks (up to 512K). Works with 2.13.0 in both directions; stock Thetis v2.10.3.15 suffices, the fork PA3GHM TL2-18 still applies. |
 | **2.13.0** | **One encrypted connection, at home and on the road.** Everything runs over one QUIC connection, directly or through the relay, and the connection finds the shortest way by itself (L, D, R, D+R, L+R). A network that blocks UDP connects over an emergency route through TCP. After a network change the app reconnects at once. The password check runs both ways. A Yaesu transmits with the same buffer and timing as Thetis, with 80 ms of lead. **Update server, desktop and app together**: a 2.12 program does not connect to 2.13. Stock Thetis v2.10.3.15 suffices; the fork PA3GHM TL2-18 is released at the same time. |
 | **2.12.0** | **A real paddle, and it keys the radio itself.** See `CHANGELOG.md`. |

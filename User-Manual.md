@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.13.1: Gebruikershandleiding
+﻿# ThetisLink v2.13.2: Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -48,7 +48,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.13.1.apk` | Android client app |
+| `ThetisLink-2.13.2.apk` | Android client app |
 | `Installatie.md`, `Installatie.pdf` | Installatiehandleiding (Nederlands) |
 | `User-Manual.md`, `User-Manual.pdf` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.md`, `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
@@ -659,7 +659,7 @@ Sinds **v2.6.0** is ook de **server-GUI** meertalig (EN/NL/DE/FR): kies de taal 
 
 ### Amplitec 6/2 Antenne Schakelaar
 
-Serieel USB verbinding (19200 baud). Toont:
+Serieel USB verbinding (19200 baud). Trek je de USB-kabel eruit en steek je hem terug, of staat het apparaat uit als de server start, dan vindt de server het vanzelf weer (hij probeert elke 5 s); geen herstart nodig. Dat geldt voor dezelfde COM-poort: in een andere USB-aansluiting kan Windows het apparaat een ander nummer geven, en dan moet dat nummer in de instellingen en de server opnieuw gestart worden. Toont:
 - Huidige schakelstand poort A en B
 - 6 antenne posities met configureerbare labels
 - Schakel knoppen per poort
@@ -675,7 +675,7 @@ De server ondersteunt **tot zes fysieke tuners parallel**, elk via een eigen Ada
 
 **Hardware-koppeling (per tuner):**
 - **GP2** → in serie met een gate-weerstand naar de gate (2N7000) of basis (MMBT3904) van een transistor; bij `HIGH` trekt de transistor de **grijze "start"-draad** van de JC-Control naar GND (mechanisch gelijk aan de start-knop indrukken).
-- **GP1** → ADC-ingang op het middenpunt van een **1 MΩ + 1 MΩ 1:1 spanningsdeler** op de **gele "tune-status"-draad**. Idle ≈ 4.5 V, tune-actief ≈ 0 V; de hoge impedantie belast de JC-Control LED-keten niet noemenswaardig.
+- **GP1** → ADC-ingang op het middenpunt van een **1 MΩ + 1 MΩ 1:1 spanningsdeler** op de **gele "tune-status"-draad**. Tune-actief ≈ 0 V; in rust rond 5 V na het inschakelen en duidelijk lager na een tune die echt getuned heeft (rond 3,3 V bij een gemeten JC-4s; het niveau hangt af van de tuner en de bedrading); de hoge impedantie belast de JC-Control LED-keten niet noemenswaardig.
 - **GND** → gemeenschappelijke massa met de JC-Control.
 - Het volledige schema (inclusief 2N7000- en MMBT3904-varianten) staat in de technische referentie.
 
@@ -691,18 +691,23 @@ De server ondersteunt **tot zes fysieke tuners parallel**, elk via een eigen Ada
 - **Live:** actuele spanning op de gele draad (V, na ×2 deler-correctie).
 - **Threshold** schuif (0.5–4.5 V, default 2.25 V): de schakelgrens op de gele draad.
 - **Hysteresis** schuif (0.1–2.0 V, default 0.50 V): doodband rondom de threshold om transient-ruis te onderdrukken.
-- **Edges:** de afgeleide grenzen (`active < … V`, `idle > … V`). Bij een onmogelijke combinatie (bijv. threshold 0.5 V + hysterese 2.0 V → active < 0 V) verschijnt een amber **clamped**-waarschuwing (met een waarschuwingsteken) met hover-tip die uitlegt dat de combinatie nooit zal triggeren: verlaag de hysterese of beweeg de threshold weg van de rand.
+- **Min press** (0–2000 ms, default 400 ms): de startknop blijft minstens zo lang ingedrukt, gerekend vanaf de druk, en nooit korter dan tot de tuner hem bevestigt. Direct na het inschakelen wil een JC-Control een druk van ongeveer een kwart seconde.
+- **Min tune time** (0–10000 ms, default 0): hoe lang na de druk een terugkeer naar idle als einde van de tune mag tellen. Het stelt alleen uit, het beoordeelt niet.
+- **Tuned below** (0–6,0 V, default 4,5 V): na een tune moet de gele draad onder dit niveau tot rust komen, anders telt de tune als mislukt. 0 = geen controle. Om hem voor je eigen tuner te kiezen: lees **Live** af direct na het inschakelen en na een tune die echt getuned heeft, en zet **Tuned below** daartussen; liggen ze niet duidelijk uit elkaar, zet dan 0. Elk van deze drie heeft naast de schuif een vakje voor een exacte waarde.
+- **Edges:** de afgeleide grenzen (`active < … V`, `idle > … V`). Bij een onmogelijke combinatie (bijv. threshold 0.5 V + hysterese 2.0 V → active < 0 V) verschijnt een amber **clamped**-waarschuwing (met een waarschuwingsteken) met hover-tip die uitlegt dat de combinatie nooit zal triggeren: verlaag de hysterese of beweeg de threshold weg van de rand. Houd de active-edge onder het niveau waarop de draad na een tune rust: ligt hij erboven, dan wordt elke tune na een geslaagde geweigerd (stap 0 hieronder).
 
 **Tune-volgorde (per tuner):**
+
+0. Staat de gele draad vóór de druk al onder de active-edge (de tuner staat uit, dan leest hij bijna 0 V, of is bezig), dan gebeurt er niets: geen druk, geen draaggolf, status **Timeout**.
 1. PA standby (SPE/RF2K) als één van beide in Operate staat.
 2. GP2 HIGH (start asserted) en wacht tot de gele draad onder de active-edge zakt = tuner ACK.
-3. GP2 LOW (start released).
+3. GP2 LOW (start released) zodra de druk **Min press** heeft geduurd.
 4. Thetis carrier ON (`ZZTU1;`).
-5. Wacht tot de gele draad terug boven de idle-edge komt = tune compleet.
-6. Thetis carrier OFF (`ZZTU0;`).
+5. Wacht tot de gele draad terug boven de idle-edge komt = tune compleet (niet eerder dan **Min tune time** na de druk).
+6. Thetis carrier OFF (`ZZTU0;`), daarna 300 ms om de draad tot rust te laten komen: op of boven **Tuned below** heeft de tuner niet getuned (status **Timeout**), eronder is de tune OK.
 7. PA terug naar Operate.
 
-Een timeout treedt op als de tuner binnen 3 s na GP2 HIGH niet ACK't (status **Timeout**), of als de tune-cyclus binnen 30 s niet compleet is (idem). **Abort** breekt de cyclus af en zet GP2 weer LOW. Eén ADC-poll is rate-limited tot 100 ms per bord; de tuner-thread checkt expliciet de sample-timestamp om dubbel-tellen van rate-limited cached samples te voorkomen.
+Een timeout treedt op als de tuner binnen 3 s na GP2 HIGH niet ACK't (status **Timeout**), als de tune-cyclus binnen 30 s niet compleet is, als de tuner niet getuned heeft (stap 6), of als hij niet klaar was (stap 0; telkens status **Timeout**). Een **Tune OK** gaat terug naar idle als de gele draad later weer op of boven **Tuned below** rust (bij **Tuned below** boven 0), zoals na het uit- en weer aanzetten van de tuner. **Abort** breekt de cyclus af en zet GP2 weer LOW. Eén ADC-poll is rate-limited tot 100 ms per bord; de tuner-thread checkt expliciet de sample-timestamp om dubbel-tellen van rate-limited cached samples te voorkomen.
 
 **USB auto-reconnect:** zodra een bridge "Connected" is geweest en de verbinding daarna wegvalt (kabel los, slaap-modus, hub reset, …) probeert de tuner-thread elke 5 s zelfstandig opnieuw te openen. Een succesvolle reconnect reset de timer zodat een volgende drop direct opnieuw geprobeerd wordt: geen server-restart nodig.
 
@@ -788,7 +793,7 @@ naartoe gaat: Thetis of een van de radio's.
 
 ### SPE Expert 1.3K-FA
 
-Serieel USB verbinding. Toont:
+Serieel USB verbinding. Trek je de USB-kabel eruit en steek je hem terug, of staat het apparaat uit als de server start, dan vindt de server het vanzelf weer (hij probeert elke 5 s); geen herstart nodig. Dat geldt voor dezelfde COM-poort: in een andere USB-aansluiting kan Windows het apparaat een ander nummer geven, en dan moet dat nummer in de instellingen en de server opnieuw gestart worden. Alleen een verloren poort wordt opnieuw geopend: een eindtrap die uit staat maar aan de USB hangt, houdt zijn poort, want het openen van de poort kan RTS bewegen en een RTS-puls zet de eindtrap aan. Toont:
 - Vermogen, SWR, temperatuur
 - Antenne selectie
 - Operate/Standby status
@@ -820,7 +825,7 @@ De RF2K-S kan gereset worden via de server UI wanneer dat nodig is.
 
 ### UltraBeam RCU-06
 
-Serieel USB verbinding (19200 baud). Functies:
+Serieel USB verbinding (19200 baud). Trek je de USB-kabel eruit en steek je hem terug, of staat het apparaat uit als de server start, dan vindt de server het vanzelf weer (hij probeert elke 5 s); geen herstart nodig. Dat geldt voor dezelfde COM-poort: in een andere USB-aansluiting kan Windows het apparaat een ander nummer geven, en dan moet dat nummer in de instellingen en de server opnieuw gestart worden. Functies:
 - **Frequentie display** met band indicatie
 - **Direction knoppen:** Normal, 180 graden, Bi-Dir
 - **Frequentie stap knoppen:** -100, -50, -25, +25, +50, +100 kHz
@@ -1095,6 +1100,25 @@ vinkje toont ook de compressortijden **Aanval** en **Loslaten**. **Vlak** zet al
 op de beginstand (pas bewaard na Opslaan). Elk profiel onthoudt of het vinkje aan staat. De EQ
 rekent op de echte rate van de microfoon; op een microfoon van 16 kHz geldt de curve tot ongeveer
 3 kHz. De telefoon heeft de vijf banden.
+
+**Zendspectrum (desktop, Yaesu).** Onder het EQ-paneel toont **Zendspectrum** wat de Opus-encoder
+krijgt: na gain, EQ, compressor, AGC en limiter, hetzelfde punt als de niveaumeter, op 16 kHz.
+**Live** is één FFT van de laatste 128 ms (2048 punten, 7,8 Hz per bin), ongeveer 20 keer per
+seconde terwijl je zendt; na het loslaten blijft hij staan op de laatste 128 ms, en dat is met een
+rogerpiep aan die piep. **Laatste doorgang** is het gemiddelde spectrum van de hele laatste doorgang
+(een rogerpiep niet, een afgespeelde WAV wel), en blijft staan na het loslaten; **Piekwaarde** is
+het hoogste niveau per frequentie daarin. **EQ** tekent de respons van de EQ die klinkt, op een
+eigen schaal rechts (vlak als de EQ uit staat). Een afgespeelde WAV gaat zonder EQ, compressor en
+AGC de lucht in; over een WAV staat daarom "EQ: niet op een WAV" in plaats van de curve. Kies
+**4 kHz** of **8 kHz** voor de as; **Log** (standaard aan) geeft een logaritmische frequentieas
+vanaf 50 Hz, uit een lineaire vanaf 0 Hz. Trek aan de streep onder de grafiek om hem hoger of lager
+te maken. Met de muis boven de grafiek zie je de frequentie en het niveau op die plek, en het niveau
+van elke lijn daar, zoals hij getekend is. Niveaus zijn dBFS: een sinus op volle sterkte leest 0 dB.
+Zend je met beide Yaesu's tegelijk, dan komt het geluid uit de keten van Yaesu 2 en staat het alleen
+in diens spectrum. De kopie wordt alleen gemaakt zolang het spectrum op het scherm staat (een
+gesloten venster of een ingeklapt EQ-paneel telt als dicht), en de zendketen wacht er nooit op. Het
+vinkje uit maakt de grafiek leeg, en het venster of paneel weer openen na een seconde of langer
+dicht ook.
 
 **Profiel en voorinstelling dragen de keten.** Een Yaesu-EQ-profiel op de desktop bewaart de EQ,
 de mic-gain, de compressor (met aanval en loslaten) en de AGC; een profiel kiezen zet ze allemaal.
@@ -1416,6 +1440,7 @@ Als het spectrum (lijn) en de waterval niet synchroon lopen bij het pannen, hers
 
 | Versie | Hoogtepunten |
 |---|---|
+| **2.13.2** | **Het zendspectrum van een Yaesu, een tuner die zegt dat hij niet tunede, en seriële apparaten die terugkomen.** De desktopclient toont in de EQ-sectie van een Yaesu het zendspectrum: wat de encoder werkelijk verstuurt, live en als gemiddelde van de laatste doorgang, met de EQ-curve erover. Een StockCorner-tuner op een MCP2221A doet de eerste tune na het inschakelen goed, meldt een tune die niet tunede als mislukt (**Tuned below**, standaard 4,5 V, 0 = uit) en wordt niet ingedrukt als hij uit staat. De UltraBeam en de SPE Expert komen vanzelf terug na een opnieuw ingestoken USB-kabel, of als ze na de server worden aangezet. Werkt met 2.13.1, in beide richtingen. |
 | **2.13.1** | **Een rechtstreekse verbinding overleeft de relay, de zendgain staat in dB, en Windows heeft niets extra nodig.** Een verbinding die via de relay gevonden is en rechtstreeks loopt (D+R, L+R) loopt door als de relay wegvalt; de R wordt rood. Een Yaesu zendt met 120 ms voorsprong (was 80 ms). Geen Visual C++ Redistributable meer nodig. Eén server per pc; de server meldt zich pas bij de relay als hij zijn poort heeft. De server bewaart de log van de vorige run, en een probleemmelding neemt die mee. De zendgain staat in dB voorin de keten, met een begrenzer op -1 dB; een Yaesu-EQ-profiel of telefoonvoorinstelling draagt de mic-gain, compressor en AGC; een geavanceerde EQ met twintig kanalen op de desktop; een CLIP-lamp. Een Yaesu-opname krijgt de ontvangstcorrectie ook; een serverinstelling voor Yaesu-ontvangstniveaus ingesteld volgens de installatiegids (radio's en instelling pas als de server en elke client 2.13.1 zijn). De PDF-handleidingen zijn terug. Eén spectrumpaneel voor elk venster, een VRX-AGC die zijn ontvanger volgt, een veld Opvullen, een fijnere pan en VRX-breedte bij hoge zoom, en de FFT-grootte alleen van een client die kijkt (tot 512K). Werkt in beide richtingen met 2.13.0; stock Thetis v2.10.3.15 volstaat, de fork PA3GHM TL2-18 blijft gelden. |
 | **2.13.0** | **Eén versleutelde verbinding, thuis en onderweg.** Alles loopt over één QUIC-verbinding, rechtstreeks of via de relay, en de verbinding zoekt zelf de kortste weg (L, D, R, D+R, L+R). Een netwerk dat UDP blokkeert verbindt via een noodroute over TCP. Na een netwerkwissel verbindt de app meteen opnieuw. De wachtwoordcontrole werkt beide kanten op. Een Yaesu zendt met dezelfde buffer en timing als Thetis, met 80 ms voorsprong. **Werk server, desktop en app tegelijk bij**: een programma van 2.12 verbindt niet met 2.13. Stock Thetis v2.10.3.15 volstaat; de fork PA3GHM TL2-18 komt tegelijk uit. |
 | **2.12.0** | **Een echte peddel, en hij sleutelt de radio zelf.** Zie `CHANGELOG.md`. |

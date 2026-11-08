@@ -1,10 +1,10 @@
-# ThetisLink v2.13.1: Technical Reference
+# ThetisLink v2.13.2: Technical Reference
 
 ## 1. Overview
 
 ThetisLink is a system for remote operation of a Thetis SDR receiver (whatever radio Thetis drives, reached over TCI and never addressed directly) and of up to two Yaesu transceivers (FT-991A / FTX-1) connected straight to the server, over a network connection. What a radio offers is what Thetis offers for it: RX2 and diversity need a second receiver, and the spectrum width follows the sample rate that radio can deliver. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over one encrypted QUIC connection with Opus codec.
 
-**Version:** v2.13.1 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.13.2 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
 **Target platform:** Windows 10/11 and Android 8+ (arm64); macOS (Intel/Apple Silicon) from source, experimental
 **Design priority:** latency > bandwidth > features
@@ -26,9 +26,23 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz**, selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.13.1`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.13.2`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.13.2 highlights
+
+**The transmit spectrum of a Yaesu** (`sdr_remote_logic::tx_tap`, `ui/tx_spectrum.rs` in the
+desktop client). The engine copies each Yaesu transmit frame where the level meter reads it, right
+before the Opus encoder, at 16 kHz, only while a spectrum is drawn, and with `try_lock` so the
+transmit path never waits. The screen runs the FFT (2048 points): live, and the Welch average and
+peak of the last over, kept in one-second blocks up to 5 minutes.
+
+**The tuner on an MCP2221A** presses for at least `min_press_ms` (400 ms), reads where the yellow wire
+settles after the tune, and reports Timeout at or above `tuned_below_v` (4.5 V); it does not press when
+the wire is already low. **Serial devices** (`serial_link`): the UltraBeam and the SPE Expert reopen
+their port after a lost port and find a device switched on after the server, as the Amplitec did. No
+change on the wire; a 2.13.2 program talks to a 2.13.1 one.
 
 ### v2.13.1 highlights
 
@@ -662,7 +676,7 @@ sdr-remote/
 | `anyhow` | 1 | Error handling |
 | `oboe` | 0.6 | Audio I/O (AAudio on Android) |
 | `uniffi` | 0.28 | Rust <-> Kotlin FFI bridge |
-| `rustfft` | 6 | FFT for spectrum processing (server) |
+| `rustfft` | 6 | FFT for spectrum processing (server; the transmit spectrum in the desktop client) |
 | `tokio-tungstenite` | 0.24 | WebSocket: TCI to Thetis (server) and wss to the relay |
 | `futures-util` | 0.3 | StreamExt/SinkExt for WebSocket (server) |
 | `serialport` | 4.7 | Serial USB communication (devices) |
@@ -1921,6 +1935,8 @@ ThetisLink defines 7 wire-protocol `DeviceType` values (0x01..0x07). Status is r
 
 6-port coax switch with two independent switches (A and B).
 
+**Connection:** like every serial device on the server (Amplitec, UltraBeam, SPE Expert) it runs through `serial_link`: the worker thread opens the port itself, reopens it when the link is lost, and retries every 5 s while the port is missing, including when the device is off at server start. One warning per outage, one line when the port opens again while the device does not answer yet, one line when it is back.
+
 **ThetisLink protocol:**
 - **Status:** switch_a = position A (1-6), switch_b = position B (1-6), labels = CSV with position names
 - **Commands:** SetSwitchA (0x01, value=position 1-6), SetSwitchB (0x02, value=position 1-6)
@@ -1931,12 +1947,14 @@ From v2.0.3 StockCorner JC-4s / JC-3s tuners (today up to six) are driven in par
 
 **Hardware (per tuner):**
 - GP2 (digital out) → series gate resistor → transistor (2N7000 / MMBT3904) → grey "start" wire to GND.
-- GP1 (ADC) → midpoint of 1 MΩ + 1 MΩ 1:1 voltage divider on the yellow "tune-status" wire (idle ≈ 4.5 V, tune-active ≈ 0 V).
+- GP1 (ADC) → midpoint of 1 MΩ + 1 MΩ 1:1 voltage divider on the yellow "tune-status" wire (tune-active ≈ 0 V; at rest around 5 V after power-on and clearly lower after a tune that really tuned, until the tuner loses its power: around 3.3 V on a JC-4s that was measured, the level depends on the tuner and the wiring).
 - Full wiring schematics with component values and BJT/MOSFET variants: see the internal MCP2221A-JC4s wiring reference (available on request from PA3GHM).
 
 **Native library:** `mcp2221-hal` v0.1.0: vendored at `vendor/mcp2221-hal/`, dual-licensed `MIT OR Apache-2.0`; ThetisLink uses the MIT branch (Apache-2.0 is not compatible with GPL-2.0-only). See `NOTICE.md` and `compliance/THIRD-PARTY-LICENSES.html` for attribution.
 
 **Tune on/off** relays to Thetis via TCI `tune:0,true;` / `tune:0,false;` (forwarded over a tokio channel).
+
+**Tune sequence:** if the yellow wire is already below the active edge before the press (the tuner is off, near 0 V, or busy), the server does nothing and reports Timeout. Otherwise the amplifier goes to Standby; GP2 goes high (the start button) and stays high until the yellow wire drops (the tuner's ACK) **and** the press has lasted `min_press_ms` (right after power-on a JC-Control needs a press of about a quarter second); then the carrier goes on and the server waits for the yellow wire to rise again. A rise sooner than `min_tune_ms` after the press is not taken as the end. After the rise the wire settles for 300 ms: at or above `tuned_below_v` the tuner did not tune and the state becomes Timeout, below it DoneOk. The carrier goes off and the amplifier back to Operate either way. The server log shows the level before the press, the moment of release and the settled level for every tune.
 
 **Tuner states:**
 
@@ -1945,7 +1963,7 @@ From v2.0.3 StockCorner JC-4s / JC-3s tuners (today up to six) are driven in par
 | Idle | 0 | No tune active | Grey |
 | Tuning | 1 | Tune in progress | Blue |
 | DoneOk | 2 | Tune successful | Green |
-| Timeout | 3 | No ACK within 3s or no completion within 30s | Amber (3s, then Idle) |
+| Timeout | 3 | No ACK within 3s, no completion within 30s, not tuned (the yellow wire settled at or above `tuned_below_v`), or not ready (the wire already low before the press) | Amber (3s, then Idle) |
 | Aborted | 4 | User aborted | Amber (3s, then Idle) |
 
 State `5` (DoneAssumed) existed in v2.0.2 for the assume-tuned workaround and has been removed in v2.0.3; older clients that still expect state 5 will never see it from a v2.0.3 server.
@@ -1957,6 +1975,9 @@ State `5` (DoneAssumed) existed in v2.0.2 for the assume-tuned workaround and ha
 - `tuner<N>_amplitec_pos`: Amplitec-A position (1..6) the tuner sits behind
 - `tuner<N>_threshold_v`: switch level on the yellow wire (default 2.25 V)
 - `tuner<N>_hysteresis_v`: dead band around the threshold (default 0.50 V)
+- `tuner<N>_min_press_ms`: minimum press of the start button, counted from the press, never released before the ACK (default 400 ms, 0 to 2000; 0 = release on the ACK)
+- `tuner<N>_min_tune_ms`: how long after the press a rise of the yellow wire may count as the end of the tune (default 0, up to 10000); it delays, it does not judge
+- `tuner<N>_tuned_below_v`: the yellow wire must settle under this level after a tune for it to count as tuned (default 4.5 V, 0 to 6.0; 0 = no check). While DoneOk, a level at or above it (the tuner was switched off and on again) sets the state back to Idle
 - `mcp2221_section_expanded`: open/closed state of the status panel MCP section
 
 Legacy v2.0.2 keys (`tuner_assume_tuned`, `tuner{1,2}_assume_tuned`, `threshold_ratio`, `baseline_override`) are silently ignored on load: existing config files do not break.
@@ -1970,6 +1991,8 @@ Legacy v2.0.2 keys (`tuner_assume_tuned`, `tuner{1,2}_assume_tuned`, `threshold_
 ### SPE Expert 1.3K-FA Linear Amplifier
 
 Linear amplifier, 1300W.
+
+**Connection:** like every serial device on the server (Amplitec, UltraBeam, SPE Expert) it runs through `serial_link`: the worker thread opens the port itself, reopens it when the link is lost, and retries every 5 s while the port is missing, including when the device is off at server start. One warning per outage, one line when the port opens again while the device does not answer yet, one line when it is back. It is opened again only on a hard I/O error (the port lost); an amplifier that is off but on USB only times out and keeps its port, because opening it can move RTS and an RTS pulse switches the amplifier on.
 
 **Hardware protocol:** Proprietary binary protocol with `0xAA 0xAA` preamble + command byte + data + XOR checksum.
 
@@ -2004,6 +2027,8 @@ RF2K-S (RFKIT) solid-state linear amplifier.
 ### UltraBeam RCU-06 Antenna Controller
 
 Controller for UltraBeam steerable Yagi antenna. Controls element lengths via stepper motors over a long (typically 50 m) cable to the mast. The RCU-06 itself tracks motor positions via encoders on that cable; ThetisLink only relays user commands and reads back status.
+
+**Connection:** like every serial device on the server (Amplitec, UltraBeam, SPE Expert) it runs through `serial_link`: the worker thread opens the port itself, reopens it when the link is lost, and retries every 5 s while the port is missing, including when the device is off at server start. One warning per outage, one line when the port opens again while the device does not answer yet, one line when it is back. It also reopens after six polls in a row without an answer (about 15 s).
 
 **Hardware protocol:** Proprietary framed binary protocol over RS-232 (USB-serial, 19200 baud). Frame format: `STX` (0xF5) + DLE-quoted (`SEQ`, `COM`, `DAT…`, `CHK`) + `ETX` (0xFA). DLE byte is `0xF6`. Checksum init `0x55`, per-byte `chk = (chk ^ b) + 1` over `SEQ + COM + DAT…`; verifying receive is "compute over `SEQ + COM + DAT… + CHK` should yield 1".
 

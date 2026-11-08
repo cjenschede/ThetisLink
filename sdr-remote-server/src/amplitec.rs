@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use log::{debug, info, warn};
+use log::{info, warn};
 
 /// Amplitec 6/2 antenna switch USB serial controller.
 /// Communicates via 19200 baud, 12-byte binary commands.
@@ -87,12 +87,6 @@ impl AmplitecSwitch {
     }
 }
 
-/// Reconnect interval when the device is offline. 5 sec is a reasonable balance
-/// between "noticing that it is back on" and "no log spam during
-/// longer outages". The wait is aborted as soon as the
-/// command channel closes (server stop), so the thread exits cleanly.
-const AMPLITEC_RECONNECT_DELAY: Duration = Duration::from_secs(5);
-
 /// Polling interval during an active session. A SCAN command every 2 sec
 /// for position updates + heartbeat so a silent USB fault
 /// is detected quickly.
@@ -103,78 +97,23 @@ fn amplitec_thread(
     status: Arc<Mutex<AmplitecStatus>>,
     port_name: String,
 ) {
-    info!("Amplitec serial thread started for {}", port_name);
-    // Log state per outage so we get only one warn per disconnect event
-    // instead of one per retry attempt (5 sec).
-    let mut have_logged_offline = false;
-    loop {
-        // ── Try to (re)open ─────────────────────────────────────────
-        let port = serialport::new(&port_name, 19200)
-            .data_bits(serialport::DataBits::Eight)
-            .parity(serialport::Parity::None)
-            .stop_bits(serialport::StopBits::One)
-            .timeout(Duration::from_millis(500))
-            .open();
-
-        let mut port = match port {
-            Ok(p) => {
-                info!("Amplitec port {} opened", port_name);
-                have_logged_offline = false;
-                {
-                    let mut s = status.lock().unwrap();
-                    s.connected = true;
-                }
-                p
-            }
-            Err(e) => {
-                if !have_logged_offline {
-                    warn!("Amplitec {} not reachable: {} (will retry every {}s)",
-                        port_name, e, AMPLITEC_RECONNECT_DELAY.as_secs());
-                    have_logged_offline = true;
-                } else {
-                    debug!("Amplitec {} still offline: {}", port_name, e);
-                }
-                mark_disconnected(&status);
-                // Drop pending commands - sending a stale switch cmd after a
-                // power-cycle would be undesirable.
-                while cmd_rx.try_recv().is_ok() {}
-                // Wait for retry or for shutdown.
-                match cmd_rx.recv_timeout(AMPLITEC_RECONNECT_DELAY) {
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        info!("Amplitec command channel closed during reconnect-wait, stopping");
-                        return;
-                    }
-                    // On Timeout and on any cmd that came in
-                    // (drain after retry) -> try to open again.
-                    _ => continue,
-                }
-            }
-        };
-
-        // ── Initial scan after successful open ──────────────────────
+    let spec = crate::serial_link::PortSpec {
+        baud: 19200,
+        timeout: Duration::from_millis(500),
+        flow_control: serialport::FlowControl::None,
+    };
+    crate::serial_link::run("Amplitec", &port_name, spec, &cmd_rx, || mark_disconnected(&status), |mut port, link| {
+        // `send_and_scan` marks the switch connected once it answers; marking it
+        // here would flash "connected" for a switch that is off on its USB.
         if let Err(e) = send_and_scan(&mut port, &CMD_SCAN, &status) {
-            warn!("Amplitec initial scan on {} failed: {}", port_name, e);
-            mark_disconnected(&status);
-            drop(port);
-            continue; // back to (re)open
+            return crate::serial_link::SessionEnd::Reconnect(format!("initial scan failed: {}", e));
         }
-
-        // ── Command/poll loop until a fault occurs ─────────────────
-        let session_outcome = run_amplitec_session(&mut port, &cmd_rx, &status);
-        drop(port);
-        mark_disconnected(&status);
-        match session_outcome {
-            SessionOutcome::Reconnect => {
-                warn!("Amplitec {} disconnected, retrying", port_name);
-                have_logged_offline = false;
-                // continue loop: open again
-            }
-            SessionOutcome::Shutdown => {
-                info!("Amplitec serial thread stopping ({})", port_name);
-                return;
-            }
+        link.up();
+        match run_amplitec_session(&mut port, &cmd_rx, &status) {
+            SessionOutcome::Reconnect => crate::serial_link::SessionEnd::Reconnect("a switch or poll command failed".to_string()),
+            SessionOutcome::Shutdown => crate::serial_link::SessionEnd::Shutdown,
         }
-    }
+    });
 }
 
 enum SessionOutcome {

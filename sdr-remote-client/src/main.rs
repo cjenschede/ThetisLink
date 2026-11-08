@@ -299,6 +299,9 @@ fn main() -> Result<()> {
     };
     // Which transport is logged by the engine, once, for both front ends.
     let engine = engine.with_quic_relay(relay_quic_grants, relay_tcp_line);
+    // What the Yaesu encoder takes, for the transmit spectrum; copied only while one is open.
+    let tx_tap = sdr_remote_logic::tx_tap::TxTap::new();
+    let engine = engine.with_tx_tap(tx_tap.clone());
 
     // The CW sidetone is shared between the paddle reader (in the UI's
     // ownership) and the playback callback (in the engine's audio backend).
@@ -380,7 +383,7 @@ fn main() -> Result<()> {
         &app_title,
         native_options,
         Box::new(move |_cc| {
-            Ok(Box::new(ui::SdrRemoteApp::new(state_rx, cmd_tx, log_buffer, relay_status_handle, sidetone)))
+            Ok(Box::new(ui::SdrRemoteApp::new(state_rx, cmd_tx, log_buffer, relay_status_handle, sidetone, tx_tap)))
         }),
     );
 

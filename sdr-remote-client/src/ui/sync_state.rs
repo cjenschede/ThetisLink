@@ -1265,10 +1265,10 @@ impl SdrRemoteApp {
         self.tuner_connected = state.tuner_connected;
         self.tuner_state = state.tuner_state;
         self.tuner_can_tune = state.tuner_can_tune;
-        // Track tune frequency: on real tune (TUNING -> DONE_OK/DONE_ASSUMED) or first
+        // Track tune frequency: on real tune (TUNING -> DONE_OK) or first
         // done-state after connect (tune_freq still 0). Ignores the fake
         // IDLE -> done-state transitions from the server's stale override.
-        let tuner_done = state.tuner_state == 2 || state.tuner_state == 5;
+        let tuner_done = state.tuner_state == 2;
         if tuner_done && (old_tuner_state == 1 || self.tuner_tune_freq == 0) {
             self.tuner_tune_freq = self.frequency_hz;
         }

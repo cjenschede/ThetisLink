@@ -100,28 +100,13 @@ const CMD_RIGHT_ARROW: u8 = 0x10; // Drive up during TX
 const CMD_STATUS: u8 = 0x90;
 
 impl SpeExpert {
-    /// Open serial port and start background thread.
-    pub fn new(port_name: &str) -> Result<Self, String> {
-        let mut port = serialport::new(port_name, 115200)
-            .data_bits(serialport::DataBits::Eight)
-            .parity(serialport::Parity::None)
-            .stop_bits(serialport::StopBits::One)
-            .flow_control(serialport::FlowControl::None)
-            .timeout(Duration::from_millis(2000))
-            .open()
-            .map_err(|e| format!("Failed to open {}: {}", port_name, e))?;
-
-        // Set RTS LOW to prevent accidental power-on pulse.
-        // DTR doesn't matter for 1.3K-FA.
-        if let Err(e) = port.write_request_to_send(false) {
-            warn!("SPE Expert: could not set RTS low: {}", e);
-        }
-
-        // Flush any stale data in the input buffer
-        if let Err(e) = port.clear(serialport::ClearBuffer::Input) {
-            warn!("SPE Expert: could not flush input: {}", e);
-        }
-
+    /// Start the serial thread. It opens the port itself and reopens it
+    /// after the port is lost (the USB cable pulled and put back), so the
+    /// amplifier comes back by itself (`serial_link`). Only a hard I/O error
+    /// reopens: an amplifier that is off but on USB only times out and keeps
+    /// its port, because opening the port can move RTS and an RTS pulse
+    /// switches the amplifier on. Watch `status().connected`.
+    pub fn new(port_name: &str) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<SpeCmd>();
         let status = Arc::new(Mutex::new(SpeStatus::default()));
 
@@ -131,11 +116,23 @@ impl SpeExpert {
         std::thread::Builder::new()
             .name("spe-expert-serial".to_string())
             .spawn(move || {
-                spe_thread(port, cmd_rx, status_for_thread, &port_name_owned);
+                let spec = crate::serial_link::PortSpec {
+                    baud: 115200,
+                    timeout: Duration::from_millis(2000),
+                    flow_control: serialport::FlowControl::None,
+                };
+                crate::serial_link::run(
+                    "SPE Expert",
+                    &port_name_owned,
+                    spec,
+                    &cmd_rx,
+                    || mark_disconnected(&status_for_thread),
+                    |port, link| spe_session(port, &cmd_rx, &status_for_thread, link),
+                );
             })
-            .map_err(|e| format!("Failed to spawn SPE Expert thread: {}", e))?;
+            .expect("Failed to spawn SPE Expert thread");
 
-        Ok(Self { cmd_tx, status })
+        Self { cmd_tx, status }
     }
 
     pub fn send_command(&self, cmd: SpeCmd) {
@@ -515,13 +512,26 @@ fn read_status_response_ex(
     }
 }
 
-fn spe_thread(
+/// One session on an open port: until the port is lost (a hard I/O error) or
+/// the server stops. Timeouts are the amplifier being off and stay here.
+fn spe_session(
     mut port: Box<dyn serialport::SerialPort>,
-    cmd_rx: mpsc::Receiver<SpeCmd>,
-    status: Arc<Mutex<SpeStatus>>,
-    port_name: &str,
-) {
-    info!("SPE Expert serial thread started on {}", port_name);
+    cmd_rx: &mpsc::Receiver<SpeCmd>,
+    status: &Arc<Mutex<SpeStatus>>,
+    link: &mut crate::serial_link::Link,
+) -> crate::serial_link::SessionEnd {
+    use crate::serial_link::SessionEnd;
+
+    // Set RTS LOW to prevent accidental power-on pulse.
+    // DTR doesn't matter for 1.3K-FA.
+    if let Err(e) = port.write_request_to_send(false) {
+        warn!("SPE Expert: could not set RTS low: {}", e);
+    }
+
+    // Flush any stale data in the input buffer
+    if let Err(e) = port.clear(serialport::ClearBuffer::Input) {
+        warn!("SPE Expert: could not flush input: {}", e);
+    }
 
     // Brief delay after port open before first query
     std::thread::sleep(Duration::from_millis(200));
@@ -541,7 +551,11 @@ fn spe_thread(
                 let mut s = status.lock().unwrap();
                 *s = parsed;
             }
+            link.up();
             (SpeEvent::InitialOk { state: state_val }, None)
+        }
+        Err(pf) if pf.kind == PollIoKind::Read => {
+            return SessionEnd::Reconnect("the first status read failed on the port".to_string());
         }
         Err(pf) => (SpeEvent::InitialFail, Some(pf.collected)),
     };
@@ -552,7 +566,7 @@ fn spe_thread(
     };
     let (new_state, log_line) = next_state(conn_state, event, &ctx);
     apply_transition(
-        &status,
+        status,
         conn_state,
         new_state,
         log_line,
@@ -590,7 +604,9 @@ fn spe_thread(
                     };
                     let _ = port.clear(serialport::ClearBuffer::Input);
                     if let Err(e) = send_single_command(&mut port, cmd_byte) {
+                        // A write that fails is the port gone, not the amplifier off.
                         warn!("SPE Expert command 0x{:02X} failed: {}", cmd_byte, e);
+                        return SessionEnd::Reconnect(e);
                     } else {
                         info!("SPE Expert: sent command 0x{:02X}", cmd_byte);
                         let _ = read_ack(&mut port);
@@ -599,37 +615,44 @@ fn spe_thread(
                 }
 
                 let _ = port.clear(serialport::ClearBuffer::Input);
-                run_poll_cycle(
+                match run_poll_cycle(
                     &mut port,
-                    &status,
+                    status,
                     &mut conn_state,
                     &mut consecutive_fails,
                     &mut offline_since,
                     tx_active,
-                );
+                ) {
+                    Ok(true) => link.up(),
+                    Ok(false) => {}
+                    Err(lost) => return SessionEnd::Reconnect(lost),
+                }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let _ = port.clear(serialport::ClearBuffer::Input);
-                run_poll_cycle(
+                match run_poll_cycle(
                     &mut port,
-                    &status,
+                    status,
                     &mut conn_state,
                     &mut consecutive_fails,
                     &mut offline_since,
                     tx_active,
-                );
+                ) {
+                    Ok(true) => link.up(),
+                    Ok(false) => {}
+                    Err(lost) => return SessionEnd::Reconnect(lost),
+                }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 info!("SPE Expert command channel closed, stopping");
-                break;
+                return SessionEnd::Shutdown;
             }
         }
     }
-
-    mark_disconnected(&status);
-    info!("SPE Expert serial thread stopped");
 }
 
+/// One status poll. `Ok(true)`: the amplifier answered; `Ok(false)`: it did
+/// not (off, or a bad answer); `Err`: the port itself is gone.
 fn run_poll_cycle(
     port: &mut Box<dyn serialport::SerialPort>,
     status: &Arc<Mutex<SpeStatus>>,
@@ -637,7 +660,7 @@ fn run_poll_cycle(
     consecutive_fails: &mut u32,
     offline_since: &mut Option<Instant>,
     tx_active: bool,
-) {
+) -> Result<bool, String> {
     match query_status_ex(port) {
         Ok(parsed) => {
             {
@@ -653,6 +676,10 @@ fn run_poll_cycle(
             *consecutive_fails = 0;
             apply_transition(status, *conn_state, new_state, log_line, None, offline_since);
             *conn_state = new_state;
+            Ok(true)
+        }
+        Err(pf) if pf.kind == PollIoKind::Read => {
+            Err("a status poll failed on the port".to_string())
         }
         Err(pf) => {
             let kind = classify_poll_failure(&pf.collected, pf.kind);
@@ -682,6 +709,7 @@ fn run_poll_cycle(
                 offline_since,
             );
             *conn_state = new_state;
+            Ok(false)
         }
     }
 }
@@ -1581,5 +1609,42 @@ mod tests {
         // Only one transition (Unknown->Offline), and it was silent.
         assert_eq!(transitions.len(), 1);
         assert!(!transitions[0].2, "Unknown->Offline must be silent");
+    }
+
+    /// A port that takes no writes is the port gone: the poll reports it as
+    /// lost (and the session reopens). An amplifier that is off only times
+    /// out: not lost, the port is kept.
+    #[test]
+    fn only_a_lost_port_is_reported_as_lost() {
+        let status = Arc::new(Mutex::new(SpeStatus::default()));
+        let (mut state, mut fails, mut since) = (SpeConnState::Unknown, 0u32, None);
+
+        let mut dead = crate::test_serial::FakeSerial::failing_writes_from(0).boxed();
+        let r = run_poll_cycle(&mut dead, &status, &mut state, &mut fails, &mut since, false);
+        assert!(r.is_err(), "a failed write is a lost port");
+
+        let mut silent = crate::test_serial::FakeSerial::new().boxed();
+        let r = run_poll_cycle(&mut silent, &status, &mut state, &mut fails, &mut since, false);
+        assert_eq!(r, Ok(false), "silence is an amplifier that is off, not a lost port");
+    }
+
+    /// A port that takes no writes ends the real session with a reconnect, in
+    /// the first status read and in the poll loop. (Write 1 is RTS low, write 2
+    /// the first status query, write 3 the first poll.)
+    #[test]
+    fn a_dead_port_ends_the_session_with_a_reconnect() {
+        for (first_failing_write, where_) in [(0, "first status read"), (2, "poll loop")] {
+            let end = crate::serial_link::session_end_within_10s(move || {
+                let (_tx, rx) = mpsc::channel::<SpeCmd>();
+                let status = Arc::new(Mutex::new(SpeStatus::default()));
+                let mut link = crate::serial_link::Link::for_test();
+                let port = crate::test_serial::FakeSerial::failing_writes_from(first_failing_write).boxed();
+                spe_session(port, &rx, &status, &mut link)
+            });
+            assert!(
+                matches!(end, Some(crate::serial_link::SessionEnd::Reconnect(_))),
+                "a dead port in the {where_} did not end the session"
+            );
+        }
     }
 }

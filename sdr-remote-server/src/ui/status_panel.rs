@@ -689,6 +689,68 @@ fn render_tuner_detector_row(
                 persist_hysteresis_v(slot, v);
             }
         });
+        // Tune timing - how long the start button stays pressed at least, how
+        // soon a return to idle may count as done, and the level the yellow
+        // wire must settle under for the tune to count as tuned. Each applies to the next tune and persists like the sliders
+        // above. The slider sets the value roughly; the field next to it takes
+        // an exact value (click and type).
+        ui.horizontal(|ui| {
+            let slot = inst.slot_index();
+            ui.label("Min press:");
+            let max = crate::mcp2221_debug::MIN_PRESS_MAX_MS;
+            let mut v = snap.min_press_ms;
+            let hover = "Keep the start button pressed at least this long, counted from the press; it is never released before the tuner acknowledges it. Right after power-on the tuner needs about a quarter second. 0 = release on the acknowledgement.";
+            let slider = ui
+                .add(egui::Slider::new(&mut v, 0..=max).step_by(10.0).show_value(false))
+                .on_hover_text(hover);
+            let field = ui
+                .add(egui::DragValue::new(&mut v).range(0..=max).speed(1.0).suffix(" ms"))
+                .on_hover_text(hover);
+            if slider.changed() || field.changed() {
+                bridge.set_min_press_ms(v);
+                persist_min_press_ms(slot, v);
+            }
+        });
+        ui.horizontal(|ui| {
+            let slot = inst.slot_index();
+            ui.label("Min tune time:");
+            let max = crate::mcp2221_debug::MIN_TUNE_MAX_MS;
+            let mut v = snap.min_tune_ms;
+            let hover = "Wait at least this long after the press before a return to idle counts as the end of the tune. It only delays: it does not judge whether the tuner tuned. 0 = take the first return to idle.";
+            let slider = ui
+                .add(egui::Slider::new(&mut v, 0..=max).step_by(100.0).show_value(false))
+                .on_hover_text(hover);
+            let field = ui
+                .add(egui::DragValue::new(&mut v).range(0..=max).speed(10.0).suffix(" ms"))
+                .on_hover_text(hover);
+            if slider.changed() || field.changed() {
+                bridge.set_min_tune_ms(v);
+                persist_min_tune_ms(slot, v);
+            }
+        });
+        ui.horizontal(|ui| {
+            let slot = inst.slot_index();
+            ui.label("Tuned below:");
+            let max = crate::mcp2221_debug::TUNED_BELOW_MAX_V;
+            let mut v = snap.tuned_below_v;
+            let hover = "After a tune the yellow wire must settle under this level, or the tune counts as failed. The tuner rests around 5 V before its first real tune and clearly lower after one (around 3.3 V on a JC-4s that was measured; it depends on the tuner and the wiring). To pick it, read Live right after power-on and after a tune that really tuned, and set it between the two. 0 = no check.";
+            let slider = ui
+                .add(egui::Slider::new(&mut v, 0.0..=max).step_by(0.05).show_value(false))
+                .on_hover_text(hover);
+            let field = ui
+                .add(
+                    egui::DragValue::new(&mut v)
+                        .range(0.0..=max)
+                        .speed(0.01)
+                        .fixed_decimals(2)
+                        .suffix(" V"),
+                )
+                .on_hover_text(hover);
+            if slider.changed() || field.changed() {
+                bridge.set_tuned_below_v(v);
+                persist_tuned_below_v(slot, v);
+            }
+        });
         // Computed edges, in V - what the bridge will compare each sample to.
         // When threshold ± hyst/2 falls outside the physically-reachable
         // yellow range (0..ADC_VREF*divider), the edges are clamped and an
@@ -930,6 +992,36 @@ fn persist_hysteresis_v(slot: usize, v: f32) {
     crate::config::modify_config(|config| {
         if slot < config.tuners.len() {
             config.tuners[slot].hysteresis_v = v;
+        }
+    });
+}
+
+/// Persist a tuner slot's minimum press (ms). Same locking story as
+/// `persist_threshold_v`.
+fn persist_min_press_ms(slot: usize, ms: u32) {
+    crate::config::modify_config(|config| {
+        if slot < config.tuners.len() {
+            config.tuners[slot].min_press_ms = ms;
+        }
+    });
+}
+
+/// Persist a tuner slot's minimum tune time (ms). Same locking story as
+/// `persist_threshold_v`.
+fn persist_min_tune_ms(slot: usize, ms: u32) {
+    crate::config::modify_config(|config| {
+        if slot < config.tuners.len() {
+            config.tuners[slot].min_tune_ms = ms;
+        }
+    });
+}
+
+/// Persist a tuner slot's "tuned below" level (V). Same locking story as
+/// `persist_threshold_v`.
+fn persist_tuned_below_v(slot: usize, v: f32) {
+    crate::config::modify_config(|config| {
+        if slot < config.tuners.len() {
+            config.tuners[slot].tuned_below_v = v;
         }
     });
 }

@@ -21,6 +21,7 @@ impl SdrRemoteApp {
         // main.rs; then we only show its status (no second relay connection).
         external_relay_status: Option<sdr_remote_relay::RelayStatusHandle>,
         sidetone: std::sync::Arc<sdr_remote_logic::sidetone::Sidetone>,
+        tx_tap: std::sync::Arc<sdr_remote_logic::tx_tap::TxTap>,
     ) -> Self {
         let config = load_config();
         sidetone.apply(config.cw_sidetone);
@@ -684,6 +685,9 @@ impl SdrRemoteApp {
             yaesu_tx_agc: config.yaesu_tx_agc,
             roger: config.roger,
             yaesu2_tx_agc: config.yaesu2_tx_agc,
+            tx_tap,
+            tx_analyzer: Default::default(),
+            tx_spectrum: Default::default(),
             // Load active EQ profile from config
             yaesu_eq_enabled: active_eq.map(|p| p.enabled).unwrap_or(false),
             yaesu_eq_advanced: active_eq.map(|p| p.advanced).unwrap_or(false),

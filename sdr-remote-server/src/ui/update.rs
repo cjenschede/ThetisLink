@@ -7,6 +7,27 @@
 
 use super::*;
 
+/// The "Hardware Support" rows of the about window: device and interface.
+/// `Credits.md` has the same table; `the_about_hardware_table_is_that_of_credits`
+/// holds the two equal, so a row changed in one place fails until the other
+/// follows.
+const HARDWARE_SUPPORT: &[(&str, &str)] = &[
+    ("Any radio Thetis drives: Apache Labs ANAN, Hermes-Lite 2, Red Pitaya", "TCI (via Thetis)"),
+    ("Yaesu FT-991A", "Serial CAT + USB Audio"),
+    ("Yaesu FTX-1", "Serial CAT + USB Audio"),
+    ("RF2K-S Power Amplifier", "HTTP API"),
+    ("SPE Expert 1.3K-FA", "Serial"),
+    ("StockCorner JC-4s / JC-3s Antenna Tuner (up to 6)", "MCP2221A USB-HID"),
+    ("UltraBeam RCU-06", "Serial"),
+    ("Amplitec 6/2 Antenna Switch", "Serial"),
+    ("EA7HG Visual Rotor", "UDP"),
+    ("Yaesu G-1000DXC Rotor", "MCP2221A USB-HID"),
+    ("PstRotator (any supported rotor)", "XML over UDP"),
+    ("Morse paddle / straight key", "MCP2221A USB-HID (desktop)"),
+    ("YPC21 / PTT-Z01 transmit button", "BLE GATT (desktop + Android)"),
+    ("ZL-01 shutter button", "Bluetooth, as an external touch device (Android)"),
+];
+
 impl eframe::App for ServerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Shared theme with the client. "Classic" is byte-for-byte the original
@@ -847,11 +868,11 @@ impl eframe::App for ServerApp {
                 if status.state != self.last_tuner_state {
                     let ts = chrono::Local::now().format("%H:%M:%S").to_string();
                     let msg = match status.state {
-                        crate::tuner::TUNER_TUNING => "Tune gestart".to_string(),
-                        crate::tuner::TUNER_DONE_OK => "Tune compleet".to_string(),
-                        crate::tuner::TUNER_TIMEOUT => "Tune timeout (30s)".to_string(),
-                        crate::tuner::TUNER_ABORTED => "Tune afgebroken".to_string(),
-                        crate::tuner::TUNER_IDLE if self.last_tuner_state != 0 => "Status reset naar Idle".to_string(),
+                        crate::tuner::TUNER_TUNING => "Tune started".to_string(),
+                        crate::tuner::TUNER_DONE_OK => "Tune complete".to_string(),
+                        crate::tuner::TUNER_TIMEOUT => "Tune failed / timeout".to_string(),
+                        crate::tuner::TUNER_ABORTED => "Tune aborted".to_string(),
+                        crate::tuner::TUNER_IDLE if self.last_tuner_state != 0 => "Status reset to Idle".to_string(),
                         _ => String::new(),
                     };
                     if !msg.is_empty() {
@@ -1448,22 +1469,7 @@ impl eframe::App for ServerApp {
                         ui.add_space(6.0);
                         ui.label(RichText::new("Hardware Support").size(13.0).strong());
                         egui::Grid::new("hw_grid_srv").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
-                            for (dev, iface) in [
-                                ("Any radio Thetis drives", "TCI (via Thetis)"),
-                                ("Yaesu FT-991A", "Serial CAT + USB Audio"),
-                                ("Yaesu FTX-1", "Serial CAT + USB Audio"),
-                                ("RF2K-S PA", "HTTP API"),
-                                ("SPE Expert 1.3K-FA", "Serial"),
-                                ("StockCorner JC-4s / JC-3s Tuner (×2)", "MCP2221A USB-HID"),
-                                ("UltraBeam RCU-06", "Serial"),
-                                ("Amplitec 6/2", "Serial"),
-                                ("EA7HG Visual Rotor", "UDP"),
-                                ("Yaesu G-1000DXC Rotor", "MCP2221A USB-HID"),
-                                ("PstRotator (any supported rotor)", "XML over UDP"),
-                                ("Morse paddle / straight key", "MCP2221A USB-HID (desktop)"),
-                                ("YPC21 / PTT-Z01 PTT button", "BLE (desktop + Android)"),
-                                ("ZL-01 shutter button", "Bluetooth touch device (Android)"),
-                            ] {
+                            for &(dev, iface) in HARDWARE_SUPPORT {
                                 ui.label(dev);
                                 ui.label(RichText::new(iface).color(Color32::GRAY));
                                 ui.end_row();
@@ -1807,5 +1813,40 @@ impl ServerApp {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod hardware_table_tests {
+    use super::HARDWARE_SUPPORT;
+
+    /// The rows under "## Hardware Support" in Credits.md, without the header
+    /// and the separator.
+    fn credits_rows() -> Vec<(String, String)> {
+        let credits = include_str!("../../../Credits.md");
+        let section = credits.split("## Hardware Support").nth(1).expect("Credits.md has a Hardware Support section");
+        section
+            .lines()
+            .skip_while(|l| !l.starts_with('|'))
+            .take_while(|l| l.starts_with('|'))
+            .skip(2)
+            .map(|l| {
+                let cells: Vec<&str> = l.trim().trim_matches('|').split('|').map(str::trim).collect();
+                assert_eq!(cells.len(), 2, "a Hardware Support row has two cells: {l}");
+                (cells[0].to_string(), cells[1].to_string())
+            })
+            .collect()
+    }
+
+    /// The about window of the server and Credits.md list the same hardware, row
+    /// for row. On 2026-11-06 Credits.md said up to six tuners and the about
+    /// window still said two; a change goes in both places or this fails.
+    #[test]
+    fn the_about_hardware_table_is_that_of_credits() {
+        let about: Vec<(String, String)> =
+            HARDWARE_SUPPORT.iter().map(|&(d, i)| (d.to_string(), i.to_string())).collect();
+        let credits = credits_rows();
+        assert!(!credits.is_empty(), "no rows read from Credits.md");
+        assert_eq!(about, credits, "the about window and Credits.md differ");
     }
 }

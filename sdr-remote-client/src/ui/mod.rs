@@ -21,6 +21,7 @@ pub(crate) mod theme;
 pub(crate) mod config;
 mod devices;
 mod yaesu_panel;
+mod tx_spectrum;
 mod screens;
 mod midi_screen;
 mod ble_screen;
@@ -1015,6 +1016,11 @@ pub struct SdrRemoteApp {
     /// per channel.
     roger: sdr_remote_logic::roger::RogerBeep,
     yaesu2_tx_agc: bool,
+    // The transmit spectrum per Yaesu: the tap the engine fills while one is
+    // open, the FFT, and what each shows (`tx_spectrum`).
+    tx_tap: std::sync::Arc<sdr_remote_logic::tx_tap::TxTap>,
+    tx_analyzer: tx_spectrum::Analyzer,
+    tx_spectrum: [tx_spectrum::TxSpectrumView; 2],
     yaesu_eq_enabled: bool,
     /// As for radio 2 above.
     yaesu_eq_advanced: bool,

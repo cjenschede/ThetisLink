@@ -266,17 +266,11 @@ fn parse_status(data: &[u8]) -> Result<UltraBeamStatus, String> {
 }
 
 impl UltraBeam {
-    /// Open serial port and start background thread.
-    pub fn new(port_name: &str) -> Result<Self, String> {
-        let port = serialport::new(port_name, 19200)
-            .data_bits(serialport::DataBits::Eight)
-            .parity(serialport::Parity::None)
-            .stop_bits(serialport::StopBits::One)
-            .flow_control(serialport::FlowControl::None)
-            .timeout(Duration::from_millis(2000))
-            .open()
-            .map_err(|e| format!("Failed to open {}: {}", port_name, e))?;
-
+    /// Start the serial thread. It opens the port itself and keeps reopening
+    /// it while the server runs, so a device that is off at start or whose
+    /// USB cable is pulled and put back comes back by itself
+    /// (`serial_link`). Watch `status().connected` for whether it answers.
+    pub fn new(port_name: &str) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<UltraBeamCmd>();
         let status = Arc::new(Mutex::new(UltraBeamStatus::default()));
 
@@ -286,11 +280,23 @@ impl UltraBeam {
         std::thread::Builder::new()
             .name("ultrabeam-serial".to_string())
             .spawn(move || {
-                ultrabeam_thread(port, cmd_rx, status_for_thread, &port_name_owned);
+                let spec = crate::serial_link::PortSpec {
+                    baud: 19200,
+                    timeout: Duration::from_millis(2000),
+                    flow_control: serialport::FlowControl::None,
+                };
+                crate::serial_link::run(
+                    "UltraBeam",
+                    &port_name_owned,
+                    spec,
+                    &cmd_rx,
+                    || status_for_thread.lock().unwrap().connected = false,
+                    |port, link| ultrabeam_session(port, &cmd_rx, &status_for_thread, link),
+                );
             })
-            .map_err(|e| format!("Failed to spawn UltraBeam thread: {}", e))?;
+            .expect("Failed to spawn UltraBeam thread");
 
-        Ok(Self { cmd_tx, status })
+        Self { cmd_tx, status }
     }
 
     pub fn send_command(&self, cmd: UltraBeamCmd) {
@@ -302,19 +308,68 @@ impl UltraBeam {
     }
 }
 
-fn ultrabeam_thread(
-    mut port: Box<dyn serialport::SerialPort>,
-    cmd_rx: mpsc::Receiver<UltraBeamCmd>,
-    status: Arc<Mutex<UltraBeamStatus>>,
-    port_name: &str,
+/// The element lengths at connect-time, so the Menu panel can render Element
+/// Lengths at once when the operator opens the UltraBeam window with
+/// `ultrabeam_show_menu = true` from config. Without this `elements_mm` stays
+/// zeroed until the operator toggles Menu off and on (which sends a
+/// ReadElements as side-effect).
+fn read_initial_elements(
+    port: &mut Box<dyn serialport::SerialPort>,
+    seq: u8,
+    status: &Arc<Mutex<UltraBeamStatus>>,
 ) {
-    info!("UltraBeam serial thread started on {}", port_name);
+    match send_and_receive(port, seq, CMD_READ_ELEMENTS, &[]) {
+        Ok((_s, _c, data)) => {
+            if data.len() >= 12 {
+                let mut elements = [0u16; 6];
+                for i in 0..6 {
+                    elements[i] = u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]);
+                }
+                status.lock().unwrap().elements_mm = elements;
+                debug!("UltraBeam initial elements: {:?}", elements);
+            } else {
+                warn!("UltraBeam initial elements: short response ({} bytes)", data.len());
+            }
+        }
+        Err(e) => warn!("UltraBeam initial elements read failed: {}", e),
+    }
+}
+
+/// Polls in a row without an answer after which the port is opened again. A
+/// poll that times out takes about 2.5 s, so this is about 15 s of silence.
+/// Only a time-out counts: a frame with a bad checksum is an answer, and the
+/// RCU-06 sends a few of those on its own every 84 to 148 s.
+const POLLS_WITHOUT_ANSWER_TO_REOPEN: u32 = 6;
+
+/// Whether an error from `send_and_receive` is silence: nothing came back.
+/// Anything else that is not a lost port (a bad checksum, a short packet) is
+/// a device that answered.
+fn is_silence(e: &str) -> bool {
+    e == "Timeout"
+}
+
+/// Whether an error from `send_and_receive` means the port itself is gone
+/// (the cable pulled) rather than a device that did not answer in time.
+fn is_lost_port(e: &str) -> bool {
+    ["Write error", "Flush error", "Read error", "EOF"].iter().any(|p| e.starts_with(p))
+}
+
+/// One session on an open port: the initial reads, then commands and polls
+/// until the port is lost, the device stays silent, or the server stops.
+fn ultrabeam_session(
+    mut port: Box<dyn serialport::SerialPort>,
+    cmd_rx: &mpsc::Receiver<UltraBeamCmd>,
+    status: &Arc<Mutex<UltraBeamStatus>>,
+    link: &mut crate::serial_link::Link,
+) -> crate::serial_link::SessionEnd {
+    use crate::serial_link::SessionEnd;
 
     std::thread::sleep(Duration::from_millis(200));
     let _ = port.clear(serialport::ClearBuffer::Input);
 
     let mut seq: u8 = 0;
-    let mut consecutive_failures: u32 = 0;
+    let mut silent_polls: u32 = 0;
+    let mut answered = false;
 
     // Initial status query
     match send_and_receive(&mut port, seq, CMD_STATUS, &[]) {
@@ -325,39 +380,39 @@ fn ultrabeam_thread(
                     *s = parsed;
                     s.connected = true;
                     info!("UltraBeam connected, FW {}.{}", s.fw_major, s.fw_minor);
+                    answered = true;
+                    link.up();
                 }
-                Err(e) => warn!("UltraBeam initial parse failed: {}", e),
+                Err(e) => debug!("UltraBeam initial parse failed: {}", e),
             }
         }
         Err(e) => {
-            warn!("UltraBeam initial query failed: {}", e);
-            consecutive_failures += 1;
+            if is_lost_port(&e) {
+                return SessionEnd::Reconnect(e);
+            }
+            debug!("UltraBeam initial query failed: {}", e);
+            if is_silence(&e) {
+                silent_polls += 1;
+            }
         }
     }
     seq = seq.wrapping_add(1);
 
-    // Initial element-lengths read at connect-time, so the Menu panel can
-    // render Element Lengths immediately when the operator opens the
-    // UltraBeam window with `ultrabeam_show_menu = true` from config.
-    // Without this the elements_mm[] stays zeroed until the operator
-    // toggles Menu off and on (which sends a ReadElements as side-effect).
-    match send_and_receive(&mut port, seq, CMD_READ_ELEMENTS, &[]) {
-        Ok((_s, _c, data)) => {
-            if data.len() >= 12 {
-                let mut elements = [0u16; 6];
-                for i in 0..6 {
-                    elements[i] = u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]);
-                }
-                let mut s = status.lock().unwrap();
-                s.elements_mm = elements;
-                debug!("UltraBeam initial elements: {:?}", elements);
-            } else {
-                warn!("UltraBeam initial elements: short response ({} bytes)", data.len());
-            }
-        }
-        Err(e) => warn!("UltraBeam initial elements read failed: {}", e),
+    // The element lengths, once per session, as soon as the RCU-06 answers:
+    // here when the first status read did, otherwise at the first poll that
+    // does (a RCU-06 switched on during the session).
+    if answered {
+        read_initial_elements(&mut port, seq, status);
+        seq = seq.wrapping_add(1);
     }
-    seq = seq.wrapping_add(1);
+
+    // A command that fails while the RCU-06 has not answered in this session
+    // (off on its USB) is expected: log it quietly, not once per command.
+    macro_rules! cmd_failed {
+        ($($arg:tt)*) => {
+            if answered { warn!($($arg)*) } else { debug!($($arg)*) }
+        };
+    }
 
     loop {
         // Check for user commands (non-blocking with 500ms timeout for polling)
@@ -374,7 +429,7 @@ fn ultrabeam_thread(
                                     warn!("UltraBeam retract response: {:?}", data);
                                 }
                             }
-                            Err(e) => warn!("UltraBeam retract failed: {}", e),
+                            Err(e) => cmd_failed!("UltraBeam retract failed: {}", e),
                         }
                         seq = seq.wrapping_add(1);
                     }
@@ -409,7 +464,7 @@ fn ultrabeam_thread(
                                     warn!("UltraBeam set freq response: {:?}", resp);
                                 }
                             }
-                            Err(e) => warn!("UltraBeam set freq failed: {}", e),
+                            Err(e) => cmd_failed!("UltraBeam set freq failed: {}", e),
                         }
                         seq = seq.wrapping_add(1);
                     }
@@ -428,7 +483,7 @@ fn ultrabeam_thread(
                                     warn!("UltraBeam read elements: short response ({} bytes)", data.len());
                                 }
                             }
-                            Err(e) => warn!("UltraBeam read elements failed: {}", e),
+                            Err(e) => cmd_failed!("UltraBeam read elements failed: {}", e),
                         }
                         seq = seq.wrapping_add(1);
                     }
@@ -445,7 +500,7 @@ fn ultrabeam_thread(
                                     warn!("UltraBeam modify element response: {:?}", resp);
                                 }
                             }
-                            Err(e) => warn!("UltraBeam modify element failed: {}", e),
+                            Err(e) => cmd_failed!("UltraBeam modify element failed: {}", e),
                         }
                         seq = seq.wrapping_add(1);
                     }
@@ -459,11 +514,12 @@ fn ultrabeam_thread(
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 info!("UltraBeam command channel closed, exiting");
-                break;
+                return SessionEnd::Shutdown;
             }
         }
 
         // Poll status
+        let mut read_elements_now = false;
         match send_and_receive(&mut port, seq, CMD_STATUS, &[]) {
             Ok((_rseq, _rcom, data)) => {
                 match parse_status(&data) {
@@ -481,24 +537,42 @@ fn ultrabeam_thread(
                         s.motor_distance_mm = preserved_motor_dist;
                         s.motor_completion = preserved_motor_compl;
                         s.connected = true;
-                        consecutive_failures = 0;
+                        drop(s);
+                        silent_polls = 0;
+                        link.up();
+                        if !answered {
+                            answered = true;
+                            read_elements_now = true;
+                        }
                     }
                     Err(e) => {
+                        // A frame came back: the device is there.
                         debug!("UltraBeam status parse error: {}", e);
-                        consecutive_failures += 1;
+                        silent_polls = 0;
                     }
                 }
             }
             Err(e) => {
                 debug!("UltraBeam status query failed: {}", e);
-                consecutive_failures += 1;
-                if consecutive_failures > 5 {
-                    let mut s = status.lock().unwrap();
-                    s.connected = false;
+                if is_lost_port(&e) {
+                    return SessionEnd::Reconnect(e);
+                }
+                if is_silence(&e) {
+                    silent_polls += 1;
+                    if silent_polls >= POLLS_WITHOUT_ANSWER_TO_REOPEN {
+                        return SessionEnd::Reconnect(format!("no answer to {} polls", silent_polls));
+                    }
+                } else {
+                    // A bad checksum or a short packet is still an answer.
+                    silent_polls = 0;
                 }
             }
         }
         seq = seq.wrapping_add(1);
+        if read_elements_now {
+            read_initial_elements(&mut port, seq, status);
+            seq = seq.wrapping_add(1);
+        }
 
         // Per-motor moving bitfield (motors_moving) contains bit 0 = motor 1, bit 1 =
         // motor 2. Both zero = nobody moving; no progress poll needed.
@@ -694,5 +768,78 @@ mod tests {
         assert!(!parse_status(&data).unwrap().off_state);
         data[7] = 0x01;
         assert!(parse_status(&data).unwrap().off_state);
+    }
+
+    /// A pulled cable shows as a write, flush or read error and ends the
+    /// session at once; a device that is slow or busy shows as a timeout or a
+    /// bad packet and is counted instead.
+    #[test]
+    fn only_a_lost_port_ends_the_session_at_once() {
+        assert!(is_lost_port("Write error: device removed"));
+        assert!(is_lost_port("Flush error: device removed"));
+        assert!(is_lost_port("Read error: device removed"));
+        assert!(is_lost_port("EOF"));
+        assert!(!is_lost_port("Timeout"));
+        assert!(!is_lost_port("Checksum mismatch (got 3)"));
+        assert!(!is_lost_port("Packet too short"));
+    }
+
+    /// A port that takes no writes is a lost port: the poll says so and does
+    /// not count it as one more silent poll.
+    #[test]
+    fn a_dead_port_is_reported_as_lost() {
+        let mut port = FakeSerial::failing_writes_from(0).boxed();
+        let err = send_and_receive(&mut port, 0, CMD_STATUS, &[]).unwrap_err();
+        assert!(is_lost_port(&err), "{err}");
+    }
+
+    /// Run the real session on `port` (with a command sender kept alive) and
+    /// give how it ended, or `None` after 10 s.
+    fn session_end(port: FakeSerial) -> Option<crate::serial_link::SessionEnd> {
+        crate::serial_link::session_end_within_10s(move || {
+            let (_tx, rx) = mpsc::channel::<UltraBeamCmd>();
+            let status = Arc::new(Mutex::new(UltraBeamStatus::default()));
+            let mut link = crate::serial_link::Link::for_test();
+            ultrabeam_session(port.boxed(), &rx, &status, &mut link)
+        })
+    }
+
+    /// A port that takes no writes ends the real session with a reconnect,
+    /// in the first status read and in the poll loop: a cable pulled while
+    /// everything runs arrives in the loop.
+    #[test]
+    fn a_dead_port_ends_the_session_with_a_reconnect() {
+        for (first_failing_write, where_) in [(0, "first status read"), (1, "poll loop")] {
+            let end = session_end(FakeSerial::failing_writes_from(first_failing_write));
+            assert!(
+                matches!(end, Some(crate::serial_link::SessionEnd::Reconnect(ref why)) if is_lost_port(why)),
+                "a dead port in the {where_} did not end the session as a lost port"
+            );
+        }
+    }
+
+    /// A RCU-06 that is off on its USB: six silent polls end the session, and
+    /// no element read is sent (it would only fail and warn).
+    #[test]
+    fn a_silent_port_ends_after_six_polls_without_an_element_read() {
+        let port = FakeSerial::new();
+        let log = port.clone();
+        let end = session_end(port);
+        match end {
+            Some(crate::serial_link::SessionEnd::Reconnect(why)) => assert_eq!(why, "no answer to 6 polls"),
+            _ => panic!("a silent port did not end the session after six polls"),
+        }
+        let written = log.log().written.clone();
+        let elements = build_packet(1, CMD_READ_ELEMENTS, &[]);
+        assert!(!written.windows(elements.len()).any(|w| w == elements.as_slice()), "an element read was sent");
+    }
+
+    /// Only a time-out is silence. A bad checksum or a short packet is a
+    /// RCU-06 that answered, and does not count towards reopening the port.
+    #[test]
+    fn only_a_timeout_is_silence() {
+        assert!(is_silence("Timeout"));
+        assert!(!is_silence("Checksum mismatch (got 129)"));
+        assert!(!is_silence("Packet too short"));
     }
 }

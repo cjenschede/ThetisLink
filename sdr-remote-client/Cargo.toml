@@ -37,6 +37,9 @@ rust-i18n = "3"
 # mDNS service browse for local-network server discovery.
 # Same crate + version as the server side - see server Cargo.toml.
 mdns-sd = "=0.19.1"
+# The transmit spectrum of a Yaesu (src/ui/tx_spectrum.rs). Same crate and
+# version as vrx-rs and the server.
+rustfft = "6"
 
 wry = "0.54"
 tao = "0.34"

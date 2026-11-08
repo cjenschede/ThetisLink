@@ -504,7 +504,7 @@ pub struct RadioState {
     // JC-4s antenna tuner
     pub tuner_available: bool,    // true once any tuner device-status packet is received
     pub tuner_connected: bool,  // Hardware connected
-    pub tuner_state: u8,        // 0=Idle, 1=Tuning, 2=DoneOk, 3=Timeout, 4=Aborted, 5=DoneAssumed
+    pub tuner_state: u8,        // 0=Idle, 1=Tuning, 2=DoneOk, 3=Timeout, 4=Aborted
     pub tuner_can_tune: bool,   // Amplitec switch A on JC-4s position
 
     // SPE Expert 1.3K-FA power amplifier

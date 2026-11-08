@@ -1483,14 +1483,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         val tuneColor = when (state.tunerState) {
                             1 -> Color(0xFF3C78DC) // Tuning = blue
                             2 -> Color(0xFF32B432) // Done OK = green
-                            5 -> Color(0xFF78A028) // Done assumed = olive green
                             3, 4 -> Color(0xFFDCA028) // Timeout/Aborted = orange
                             else -> Color(0xFF505050) // Idle = grey
                         }
                         val tuneText = when (state.tunerState) {
                             1 -> "Tune..."
                             2 -> "Tune \u2713"
-                            5 -> "Tune ~"
                             3, 4 -> "Tune \u2717"
                             else -> "Tune"
                         }

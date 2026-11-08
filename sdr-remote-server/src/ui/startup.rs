@@ -291,20 +291,14 @@ impl ServerApp {
         self.macro_cat_tx = Some(cat_tx.clone());
 
         // Create SPE Expert early (before tuner, so tuner can reference it for safe tune)
+        // The SPE and the UltraBeam open their port in their own thread and
+        // keep reopening it (`serial_link`), like the Amplitec above: the
+        // window is there even when the device is off at start.
         let spe_arc = if !spe_port_str.is_empty() && self.spe_enabled {
-            let port = spe_port_str.clone();
-            match with_timeout(com_timeout, move || SpeExpert::new(&port)) {
-                Ok(dev) => {
-                    log::info!("SPE Expert connected on {}", spe_port_str);
-                    let arc_dev = Arc::new(dev);
-                    self.spe = Some(arc_dev.clone());
-                    Some(arc_dev)
-                }
-                Err(e) => {
-                    log::warn!("SPE Expert init failed: {}", e);
-                    None
-                }
-            }
+            log::info!("SPE Expert starting on {} (connects in the background)", spe_port_str);
+            let arc_dev = Arc::new(SpeExpert::new(&spe_port_str));
+            self.spe = Some(arc_dev.clone());
+            Some(arc_dev)
         } else {
             None
         };
@@ -340,16 +334,8 @@ impl ServerApp {
         };
         // Create UltraBeam if configured
         if !ub_port.is_empty() && self.ultrabeam_enabled {
-            let port = ub_port.clone();
-            match with_timeout(com_timeout, move || UltraBeam::new(&port)) {
-                Ok(dev) => {
-                    log::info!("UltraBeam RCU-06 connected on {}", ub_port);
-                    self.ultrabeam = Some(Arc::new(dev));
-                }
-                Err(e) => {
-                    log::warn!("UltraBeam init failed: {}", e);
-                }
-            }
+            log::info!("UltraBeam RCU-06 starting on {} (connects in the background)", ub_port);
+            self.ultrabeam = Some(Arc::new(UltraBeam::new(&ub_port)));
         }
 
         // Create Rotor if configured - backend choice: EA7HG, PstRotator

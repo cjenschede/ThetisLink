@@ -68,7 +68,7 @@ pub struct TunerConfig {
     /// position; pressing Tune does not auto-route to it.
     pub amplitec_pos: Option<u8>,
     /// Tune-detector switch threshold on the yellow tune-status wire, in
-    /// volts. Default 2.25 V (midpoint between the typical ~4.5 V idle and
+    /// volts. Default 2.25 V (between the idle levels, around 5 V and lower after a tune, and
     /// ~0 V LED-on level).
     pub threshold_v: f32,
     /// Hysteresis around the threshold, in volts. yellow_v <
@@ -76,6 +76,16 @@ pub struct TunerConfig {
     /// (threshold + hyst/2) counts as tune-idle; samples inside the window
     /// preserve the previous state. Default 0.50 V.
     pub hysteresis_v: f32,
+    /// Minimum press of the start button, counted from the press, in ms. The
+    /// button is never released before the tuner's ACK. Default
+    /// `DEFAULT_MIN_PRESS_MS`; 0 releases on the ACK.
+    pub min_press_ms: u32,
+    /// Minimum time since the press before a return to idle counts as tune
+    /// complete, in ms. Default 0: believe the first return to idle.
+    pub min_tune_ms: u32,
+    /// The yellow wire must settle under this level after a tune for it to
+    /// count as tuned, in volts. Default `DEFAULT_TUNED_BELOW_V`; 0 = no check.
+    pub tuned_below_v: f32,
 }
 
 impl Default for TunerConfig {
@@ -87,6 +97,9 @@ impl Default for TunerConfig {
             amplitec_pos: None,
             threshold_v: 2.25,
             hysteresis_v: 0.50,
+            min_press_ms: crate::mcp2221_debug::DEFAULT_MIN_PRESS_MS,
+            min_tune_ms: 0,
+            tuned_below_v: crate::mcp2221_debug::DEFAULT_TUNED_BELOW_V,
         }
     }
 }
@@ -662,6 +675,23 @@ fn parse_tuner_key(t: &mut TunerConfig, sub: &str, value: &str) {
         "hysteresis_v" => {
             if let Ok(v) = value.parse::<f32>() {
                 t.hysteresis_v = v.clamp(0.1, 2.0);
+            }
+        }
+        "min_press_ms" => {
+            if let Ok(v) = value.parse::<u32>() {
+                t.min_press_ms = v.min(crate::mcp2221_debug::MIN_PRESS_MAX_MS);
+            }
+        }
+        "min_tune_ms" => {
+            if let Ok(v) = value.parse::<u32>() {
+                t.min_tune_ms = v.min(crate::mcp2221_debug::MIN_TUNE_MAX_MS);
+            }
+        }
+        "tuned_below_v" => {
+            if let Ok(v) = value.parse::<f32>() {
+                if v.is_finite() {
+                    t.tuned_below_v = v.clamp(0.0, crate::mcp2221_debug::TUNED_BELOW_MAX_V);
+                }
             }
         }
         _ => {}
@@ -1667,6 +1697,9 @@ fn render_conf(config: &ServerConfig) -> String {
         ));
         contents.push_str(&format!("{}_threshold_v={}\n", prefix, t.threshold_v));
         contents.push_str(&format!("{}_hysteresis_v={}\n", prefix, t.hysteresis_v));
+        contents.push_str(&format!("{}_min_press_ms={}\n", prefix, t.min_press_ms));
+        contents.push_str(&format!("{}_min_tune_ms={}\n", prefix, t.min_tune_ms));
+        contents.push_str(&format!("{}_tuned_below_v={}\n", prefix, t.tuned_below_v));
     }
     // Per-rotor slots - rotor1_* / rotor2_*
     // keys: enabled / name / mcp_serial, then calibration + speed fields.

@@ -14,8 +14,8 @@ android {
         applicationId = "com.sdrremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 88
-        versionName = "2.13.1"
+        versionCode = 89
+        versionName = "2.13.2"
 
         // ThetisLink is a 64-bit ARM app, and this line is what makes Android
         // say so at install time instead of at the first tap.

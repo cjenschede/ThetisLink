@@ -943,6 +943,25 @@ impl SdrRemoteApp {
             }
         });
 
+        // The transmit spectrum: what the encoder takes, with the EQ that sounds over it.
+        // Whether the tap copies is decided once per frame from what was drawn
+        // (`tx_spectrum::tap_wanted`, in `update`), so a shut window or a folded
+        // section stops it too.
+        let s = usize::from(slot.min(1));
+        if ui.checkbox(&mut self.tx_spectrum[s].open, rust_i18n::t!("dev_txspec").to_string())
+            .on_hover_text(rust_i18n::t!("dev_txspec_hover").to_string())
+            .changed()
+            && !self.tx_spectrum[s].open
+        {
+            self.tx_spectrum[s].clear();
+        }
+        if self.tx_spectrum[s].open {
+            self.tx_spectrum[s].update(&self.tx_analyzer, &self.tx_tap, s);
+            let sounding = super::config::active_eq_bands(advanced, &std_gains, &bands);
+            super::tx_spectrum::show(ui, &mut self.tx_spectrum[s], enabled.then_some(&sounding));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        }
+
         // Writeback to the slot state.
         if slot == 0 {
             self.yaesu_eq_enabled = enabled; self.yaesu_eq_advanced = advanced;
@@ -2289,6 +2308,10 @@ impl SdrRemoteApp {
     }
 }
 
+/// The dB range (plus and minus) of an EQ curve: the curve above the channels
+/// and the overlay in the transmit spectrum.
+pub(super) const EQ_CURVE_DB: f32 = 18.0;
+
 fn kind_label(k: eq::FilterKind) -> String {
     let key = match k {
         eq::FilterKind::Off => "dev_eq_kind_off",
@@ -2307,7 +2330,7 @@ fn kind_label(k: eq::FilterKind) -> String {
 fn eq_response_curve(ui: &mut egui::Ui, bands: &eq::EqBands) {
     const F_LO: f32 = 50.0;
     const F_HI: f32 = 8000.0;
-    const DB: f32 = 18.0;
+    const DB: f32 = EQ_CURVE_DB;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().clamp(240.0, 520.0), 120.0), egui::Sense::hover());
     let p = ui.painter_at(rect);
     let v = ui.visuals();

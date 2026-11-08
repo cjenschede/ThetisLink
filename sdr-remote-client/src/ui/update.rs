@@ -257,6 +257,14 @@ impl eframe::App for SdrRemoteApp {
         // timeline correlation.
         controls::begin_frame();
 
+        // The transmit spectrum's tap copies only while a spectrum was drawn
+        // lately; one more frame after that window, so a shut window stops it.
+        let tap_on = super::tx_spectrum::tap_wanted(&self.tx_spectrum, std::time::Instant::now());
+        self.tx_tap.set_enabled(tap_on);
+        if tap_on {
+            ctx.request_repaint_after(super::tx_spectrum::SHOWN_WITHIN);
+        }
+
         // Clear per-frame flags
         ctx.memory_mut(|mem| mem.data.remove::<bool>(egui::Id::new("freq_scroll_consumed")));
 
@@ -608,11 +616,9 @@ impl eframe::App for SdrRemoteApp {
                 // the wrong tuner's freq. Drop the client-side gate and trust the
                 // server state directly.
                 if self.tuner_can_tune && self.tuner_connected {
-                    let olive_green = Color32::from_rgb(120, 160, 40);
                     let (tune_color, tune_text) = match self.tuner_state {
                         1 => (Color32::from_rgb(60, 120, 220), rust_i18n::t!("main_tune_tuning").to_string()),  // Tuning = blue
                         2 => (Color32::from_rgb(50, 180, 50), rust_i18n::t!("main_tune_ok").to_string()),  // Done OK = green
-                        5 => (olive_green, rust_i18n::t!("main_tune_assumed").to_string()),  // Done assumed = olive green
                         3 | 4 => (Color32::from_rgb(220, 160, 40), rust_i18n::t!("main_tune_failed").to_string()),  // Timeout/Aborted = orange
                         _ => (Color32::from_rgb(80, 80, 80), rust_i18n::t!("main_tune").to_string()),  // Idle = grey
                     };

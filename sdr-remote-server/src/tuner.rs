@@ -4,28 +4,40 @@
 //! legacy serial-port RTS/CTS flow).
 //!
 //! Each physical tuner is a [`TunerInstance`]: it owns one MCP2221A bridge
-//! plus a background thread that runs the tune sequence. Up to two instances
-//! live inside a [`Tuners`] collection - JC-4s and JC-3s share an identical
+//! plus a background thread that runs the tune sequence. Up to six instances
+//! (`MAX_TUNERS`) live inside a [`Tuners`] collection - JC-4s and JC-3s share an identical
 //! control protocol, so the only per-instance difference is the cosmetic
 //! `TunerModel` label, the target MCP2221A USB serial and the optional
 //! Amplitec-A position the tuner sits behind.
 //!
 //! Tune-sequence (per instance) - feedback-driven via the GP1 ADC tune-status
 //! line, preserving the PA-standby orchestration from the build-48 flow:
+//!   0. The yellow line must be at rest before the press. Already below
+//!      `threshold - hyst/2` means the tuner is off (it then reads near 0 V)
+//!      or busy: no press, no carrier, `TUNER_TIMEOUT`.
 //!   1. PA standby (SPE / RF2K) if either is in Operate.
 //!   2. GP2 HIGH  - assert start-button and HOLD until the JC-Control
 //!                  acknowledges the press (= yellow drops below
 //!                  `threshold - hyst/2`). No ACK within 3 s -> `TUNER_TIMEOUT`.
-//!   3. GP2 LOW   - release the start-button now that the tuner has ACK'd.
+//!   3. GP2 LOW   - release the start-button once the tuner has ACK'd AND
+//!                  the press has lasted `min_press_ms` (default 400 ms, counted
+//!                  from step 2: right after power-on the JC-Control needs a
+//!                  press of about a quarter second).
 //!   4. ZZTU1     - Thetis carrier ON, tuner consumes RF to do its job.
 //!   5. Wait for the yellow line to go back above `threshold + hyst/2`
-//!      (LED off, tune cycle complete). 30 s hard cap.
-//!   6. ZZTU0     - Thetis carrier OFF.
+//!      (LED off, tune cycle complete). 30 s hard cap. With `min_tune_ms`
+//!      set, a return to idle sooner than that after the press is ignored.
+//!   6. ZZTU0     - Thetis carrier OFF. The line then settles for
+//!                  `SETTLE_MS`; a settled level at or above `tuned_below_v`
+//!                  (default 4.5 V) means the tuner did not tune: it rests
+//!                  around 5 V before its first real tune and clearly lower
+//!                  after one (around 3.3 V on a JC-4s that was measured; the
+//!                  level depends on the tuner and the wiring).
 //!   7. PA operate restore.
 //!
 //! Threshold rationale (1 MΩ + 1 MΩ 1:1 divider on the yellow tune-status
 //! wire):
-//!   - idle yellow ≈ 4.5 V
+//!   - idle yellow around 5 V after power-on, clearly lower after a tune
 //!   - tune-LED on yellow ≈ 0 V
 //! Operator sets the switch threshold (default 2.25 V) and hysteresis
 //! (default 0.50 V) per-tuner via the Status panel.
@@ -75,6 +87,9 @@ const ADC_POLL_INTERVAL_MS: u64 = 25;
 /// before being believed - single-sample noise rejection on top of the
 /// hysteresis window.
 const EDGE_CONSECUTIVE: usize = 2;
+/// After the idle edge, how long the yellow line gets to settle before its
+/// level decides between "tuned" and "not tuned".
+const SETTLE_MS: u64 = 300;
 
 #[derive(Debug)]
 pub enum TunerCmd {
@@ -131,6 +146,9 @@ impl TunerInstance {
         // immediately.
         bridge.set_threshold_v(config.threshold_v);
         bridge.set_hysteresis_v(config.hysteresis_v);
+        bridge.set_min_press_ms(config.min_press_ms);
+        bridge.set_min_tune_ms(config.min_tune_ms);
+        bridge.set_tuned_below_v(config.tuned_below_v);
         bridge.reconnect();
         let initial = bridge.snapshot();
         let connected = matches!(initial.status, BridgeStatus::Connected);
@@ -218,7 +236,7 @@ impl TunerInstance {
     }
 }
 
-/// Collection of all enabled tuners (0, 1 or 2). Constructed from
+/// Collection of all enabled tuners (0 to `MAX_TUNERS`). Constructed from
 /// `ServerConfig::tuners`; routes the client's Tune button to the right
 /// instance based on the active Amplitec-A position.
 pub struct Tuners {
@@ -305,11 +323,19 @@ fn check_abort(cmd_rx: &mpsc::Receiver<TunerCmd>) -> bool {
 /// Reset state to Idle after 3 s - same heuristic as build-48 so the UI
 /// banner clears itself after the user has had a chance to read it.
 fn schedule_idle_reset(status: &Arc<Mutex<TunerStatus>>) {
+    idle_reset_after(status, Duration::from_secs(3));
+}
+
+/// Back to Idle after `delay`, but only when the state is still the one it was
+/// when this was scheduled: a refused press followed by a tune that is done
+/// within the 3 s keeps its "Tune OK".
+fn idle_reset_after(status: &Arc<Mutex<TunerStatus>>, delay: Duration) {
+    let scheduled = status.lock().unwrap().state;
     let status = status.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(3));
+        std::thread::sleep(delay);
         let mut s = status.lock().unwrap();
-        if s.state != TUNER_TUNING && s.state != TUNER_IDLE {
+        if s.state == scheduled && s.state != TUNER_TUNING && s.state != TUNER_IDLE {
             s.state = TUNER_IDLE;
         }
     });
@@ -372,6 +398,20 @@ fn tuner_thread(
                         info!("{}: bridge connected={}", label, connected);
                     }
                     s.connected = connected;
+                    // A tuner switched off and on again forgets its tune and
+                    // rests around 5 V again: a "Tune OK" from before would
+                    // then lie.
+                    if connected && s.state == TUNER_DONE_OK && snap.tuned_below_v > 0.0 {
+                        if let Some(v) = snap.last_yellow_v {
+                            if v >= snap.tuned_below_v {
+                                info!(
+                                    "{}: tune no longer held - yellow at rest {:.2} V, at or above tuned_below {:.2} V",
+                                    label, v, snap.tuned_below_v
+                                );
+                                s.state = TUNER_IDLE;
+                            }
+                        }
+                    }
                 }
                 if connected {
                     last_reconnect_at = None;
@@ -417,7 +457,26 @@ fn run_tune_sequence(
     info!("{}: starting tune sequence", label);
     set_state(status, TUNER_TUNING);
 
-    // Step 0 - PA(s) to Standby.
+    // A tuner without power reads near 0 V, and one that is busy reads low too:
+    // the ACK test below would see that at once and key the carrier into a
+    // tuner that is not listening (field test, 2026-11-06: 0.05 V, ACK
+    // after 0.05 to 0.10 s). Nothing is touched yet, so nothing to restore.
+    // Step 0 - the yellow line at rest before the press.
+    let before = bridge.snapshot();
+    if let Some(raw) = before.last_adc_raw {
+        if bridge.is_tune_active(raw) {
+            warn!(
+                "{}: tuner not ready - yellow at {:.2} V before the press (off or busy); no press, no carrier",
+                label,
+                Mcp2221Debug::yellow_v(raw)
+            );
+            set_state(status, TUNER_TIMEOUT);
+            schedule_idle_reset(status);
+            return;
+        }
+    }
+
+    // Step 1 - PA(s) to Standby.
     let restore_spe = safe_tune_standby(spe, label);
     let restore_rf2k = safe_tune_standby_rf2k(rf2k, label);
     if restore_spe || restore_rf2k {
@@ -425,13 +484,23 @@ fn run_tune_sequence(
         std::thread::sleep(Duration::from_millis(500));
     }
 
-    // Step 1 - GP2 HIGH, HOLD until JC-Control acknowledges the press.
+    // Step 2 - GP2 HIGH, HOLD until JC-Control acknowledges the press.
     // Feedback-driven: no fixed 150 ms wait - we keep the start-button
     // asserted for as long as it takes the tuner to register, then react.
+    let timing = bridge.snapshot();
+    let min_press = Duration::from_millis(u64::from(timing.min_press_ms));
+    let min_tune = Duration::from_millis(u64::from(timing.min_tune_ms));
     bridge.set_gp2(true);
-    info!("{}: GP2 HIGH (start asserted, holding until ADC ACK)", label);
+    info!(
+        "{}: GP2 HIGH (start asserted, holding until ADC ACK; yellow before press={}, min_press={} ms, min_tune={} ms, tuned_below={:.2} V)",
+        label,
+        timing.last_yellow_v.map(|v| format!("{:.2} V", v)).unwrap_or_else(|| "no sample".to_string()),
+        timing.min_press_ms,
+        timing.min_tune_ms,
+        timing.tuned_below_v
+    );
 
-    // Step 2 - Wait for tune-active edge while GP2 is still HIGH.
+    // Step 2, continued - wait for the tune-active edge while GP2 is still HIGH.
     // No ACK within ACTIVE_SEARCH_TIMEOUT_SECS -> TIMEOUT.
     //
     // Note: snapshot() rate-limits the USB ADC poll to ADC_POLL_MIN_MS (100 ms)
@@ -487,9 +556,30 @@ fn run_tune_sequence(
         std::thread::sleep(Duration::from_millis(ADC_POLL_INTERVAL_MS));
     }
 
-    // Step 3 - Release the start-button now that the tuner has ACK'd.
+    // Step 3 - Release the start-button now that the tuner has ACK'd, once the
+    // press has lasted min_press since GP2 HIGH. The ACK lands 0.1 to 0.2 s in,
+    // depending on where the 100 ms ADC poll falls, so a hold counted from the
+    // ACK would give a press of varying length. The hold sleeps in poll-sized
+    // steps so an abort still lands within one step.
+    while start.elapsed() < min_press {
+        if check_abort(cmd_rx) {
+            info!("{}: tune aborted at {:.2}s (holding to the minimum press)", label, start.elapsed().as_secs_f32());
+            bridge.set_gp2(false);
+            set_state(status, TUNER_ABORTED);
+            schedule_idle_reset(status);
+            if restore_spe { safe_tune_operate(spe, label); }
+            if restore_rf2k { safe_tune_operate_rf2k(rf2k, label); }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(ADC_POLL_INTERVAL_MS));
+    }
     bridge.set_gp2(false);
-    info!("{}: GP2 LOW (start released after tuner ACK)", label);
+    info!(
+        "{}: GP2 LOW at {:.2}s (start released after tuner ACK, min press {} ms)",
+        label,
+        start.elapsed().as_secs_f32(),
+        min_press.as_millis()
+    );
 
     // Step 4 - Carrier ON so the tuner has RF to chew on.
     if cat_tx.blocking_send("ZZTU1;".to_string()).is_err() {
@@ -503,10 +593,11 @@ fn run_tune_sequence(
     info!("{}: tune carrier ON (ZZTU1); waiting for ADC to return to idle", label);
 
     // Step 5 - wait for tune complete (ADC back above the idle threshold).
-    // Same dedup as Step 2: only count a consecutive idle edge when
+    // Same dedup as the ACK wait in step 2: only count a consecutive idle edge when
     // last_adc_at advances, so rate-limited cached samples don't double-count.
     let mut consecutive_idle = 0usize;
     let mut last_seen_at: Option<Instant> = None;
+    let mut early_idle_logged = false;
     loop {
         if check_abort(cmd_rx) {
             info!("{}: tune aborted at {:.2}s (waiting for idle)", label, start.elapsed().as_secs_f32());
@@ -530,12 +621,36 @@ fn run_tune_sequence(
         if let (Some(raw), Some(at)) = (snap.last_adc_raw, snap.last_adc_at) {
             if last_seen_at != Some(at) {
                 last_seen_at = Some(at);
-                if bridge.is_tune_idle(raw) {
+                if bridge.is_tune_idle(raw) && start.elapsed() < min_tune {
+                    // Too soon after the press to be a finished tune: keep waiting.
+                    if !early_idle_logged {
+                        info!(
+                            "{}: idle at {:.2}s ignored (raw={}, before min_tune {} ms)",
+                            label,
+                            start.elapsed().as_secs_f32(),
+                            raw,
+                            min_tune.as_millis()
+                        );
+                        early_idle_logged = true;
+                    }
+                    consecutive_idle = 0;
+                } else if bridge.is_tune_idle(raw) {
                     consecutive_idle += 1;
                     if consecutive_idle >= EDGE_CONSECUTIVE {
                         info!("{}: tune COMPLETE at {:.2}s (raw={})", label, start.elapsed().as_secs_f32(), raw);
                         let _ = cat_tx.blocking_send("ZZTU0;".to_string());
-                        set_state(status, TUNER_DONE_OK);
+                        let settled = settled_yellow_v(bridge, raw);
+                        if timing.tuned_below_v > 0.0 && settled >= timing.tuned_below_v {
+                            warn!(
+                                "{}: NOT tuned - yellow settled at {:.2} V, at or above tuned_below {:.2} V",
+                                label, settled, timing.tuned_below_v
+                            );
+                            set_state(status, TUNER_TIMEOUT);
+                            schedule_idle_reset(status);
+                        } else {
+                            info!("{}: tuned - yellow settled at {:.2} V", label, settled);
+                            set_state(status, TUNER_DONE_OK);
+                        }
                         if restore_spe { safe_tune_operate(spe, label); }
                         if restore_rf2k { safe_tune_operate_rf2k(rf2k, label); }
                         return;
@@ -547,6 +662,20 @@ fn run_tune_sequence(
         }
         std::thread::sleep(Duration::from_millis(ADC_POLL_INTERVAL_MS));
     }
+}
+
+/// Yellow-wire level after `SETTLE_MS`: the last fresh sample in that window,
+/// or the idle-edge sample when no fresh one came.
+fn settled_yellow_v(bridge: &Arc<Mcp2221Debug>, edge_raw: u16) -> f32 {
+    let until = Instant::now() + Duration::from_millis(SETTLE_MS);
+    let mut raw = edge_raw;
+    while Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(ADC_POLL_INTERVAL_MS));
+        if let Some(r) = bridge.snapshot().last_adc_raw {
+            raw = r;
+        }
+    }
+    Mcp2221Debug::yellow_v(raw)
 }
 
 // ============================================================================
@@ -666,5 +795,34 @@ fn safe_tune_operate_rf2k(rf2k: &Option<Arc<Rf2k>>, label: &str) {
             }
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status_in(state: u8) -> Arc<Mutex<TunerStatus>> {
+        Arc::new(Mutex::new(TunerStatus { state, connected: true, stale: false }))
+    }
+
+    /// A Timeout goes back to Idle after the delay.
+    #[test]
+    fn a_timeout_goes_back_to_idle() {
+        let status = status_in(TUNER_TIMEOUT);
+        idle_reset_after(&status, Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(status.lock().unwrap().state, TUNER_IDLE);
+    }
+
+    /// A refused press (Timeout) followed by a tune that is done within the
+    /// delay: the reset of the refusal leaves the new "Tune OK" alone.
+    #[test]
+    fn a_later_tune_ok_is_not_wiped_by_an_earlier_reset() {
+        let status = status_in(TUNER_TIMEOUT);
+        idle_reset_after(&status, Duration::from_millis(50));
+        status.lock().unwrap().state = TUNER_DONE_OK;
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(status.lock().unwrap().state, TUNER_DONE_OK);
     }
 }

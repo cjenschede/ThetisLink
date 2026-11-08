@@ -18,6 +18,7 @@ mod pa_policy;
 mod power_cap;
 mod ptt;
 mod rf2k;
+mod serial_link;
 mod session;
 mod single_instance;
 #[cfg(test)]
@@ -806,16 +807,8 @@ fn main() -> Result<()> {
 
             // Create SPE Expert if configured (CLI mode)
             let spe_arc = if let Some(ref port) = config.spe_port {
-                match spe_expert::SpeExpert::new(port) {
-                    Ok(dev) => {
-                        info!("SPE Expert connected on {}", port);
-                        Some(Arc::new(dev))
-                    }
-                    Err(e) => {
-                        warn!("SPE Expert init failed: {}", e);
-                        None
-                    }
-                }
+                info!("SPE Expert starting on {} (connects in the background)", port);
+                Some(Arc::new(spe_expert::SpeExpert::new(port)))
             } else {
                 None
             };
@@ -1049,16 +1042,8 @@ pub async fn run_server_async(
         spe_prebuilt
     } else if config.spe_enabled && config.spe_port.is_some() {
         let port_name = config.spe_port.as_ref().unwrap();
-        match spe_expert::SpeExpert::new(port_name) {
-            Ok(dev) => {
-                info!("SPE Expert connected on {}", port_name);
-                Some(Arc::new(dev))
-            }
-            Err(e) => {
-                warn!("SPE Expert init failed: {}", e);
-                None
-            }
-        }
+        info!("SPE Expert starting on {} (connects in the background)", port_name);
+        Some(Arc::new(spe_expert::SpeExpert::new(port_name)))
     } else {
         None
     };
@@ -1090,7 +1075,7 @@ pub async fn run_server_async(
     };
 
     // StockCorner tuners - use prebuilt (from GUI) or create here (CLI mode).
-    // Multi-instance: 0, 1 or 2 tuners, each on its own MCP2221A board.
+    // Multi-instance: 0 to MAX_TUNERS tuners, each on its own MCP2221A board.
     let spe_arc = spe.as_ref().map(|s| s.clone());
     let rf2k_arc = rf2k.as_ref().map(|r| r.clone());
     let (tuners, tuner_cat_rx) = if let Some(t) = tuners_prebuilt {
@@ -1143,16 +1128,8 @@ pub async fn run_server_async(
         ultrabeam_prebuilt
     } else if config.ultrabeam_enabled && config.ultrabeam_port.is_some() {
         let port_name = config.ultrabeam_port.as_ref().unwrap();
-        match ultrabeam::UltraBeam::new(port_name) {
-            Ok(dev) => {
-                info!("UltraBeam RCU-06 connected on {}", port_name);
-                Some(Arc::new(dev))
-            }
-            Err(e) => {
-                warn!("UltraBeam init failed: {}", e);
-                None
-            }
-        }
+        info!("UltraBeam RCU-06 starting on {} (connects in the background)", port_name);
+        Some(Arc::new(ultrabeam::UltraBeam::new(port_name)))
     } else {
         None
     };

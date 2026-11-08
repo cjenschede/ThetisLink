@@ -1439,11 +1439,6 @@ main_tune_ok:
   nl: "Tune OK"
   de: "Tune OK"
   fr: "Tune OK"
-main_tune_assumed:
-  en: "Tune ~"
-  nl: "Tune ~"
-  de: "Tune ~"
-  fr: "Tune ~"
 main_tune_failed:
   en: "Tune X"
   nl: "Tune X"
@@ -1771,11 +1766,6 @@ dev_aborted:
   nl: "Afgebroken"
   de: "Abgebrochen"
   fr: "Interrompu"
-dev_done_already_tuned:
-  en: "Done~ (already tuned)"
-  nl: "Klaar~ (al afgestemd)"
-  de: "Fertig~ (bereits abgestimmt)"
-  fr: "Terminé~ (déjà accordé)"
 dev_idle:
   en: "Idle"
   nl: "Inactief"
@@ -1791,11 +1781,6 @@ dev_tune_x:
   nl: "Tune X"
   de: "Tune X"
   fr: "Tune X"
-dev_tune_tilde:
-  en: "Tune ~"
-  nl: "Tune ~"
-  de: "Tune ~"
-  fr: "Tune ~"
 dev_tune:
   en: "Tune"
   nl: "Tune"
@@ -2391,6 +2376,71 @@ dev_eq_flat_hover:
   nl: "alle kanalen terug naar de beginstand (pas bewaard na Opslaan)"
   de: "alle Kanäle zurück auf den Ausgangspunkt (erst nach Speichern gesichert)"
   fr: "tous les canaux au point de départ (enregistré seulement après Enregistrer)"
+dev_txspec:
+  en: "Transmit spectrum"
+  nl: "Zendspectrum"
+  de: "Sendespektrum"
+  fr: "Spectre d'émission"
+dev_txspec_hover:
+  en: "What the Opus encoder takes, after gain, EQ, compressor, AGC and limiter: the same point as the level meter"
+  nl: "Wat de Opus-encoder krijgt, na gain, EQ, compressor, AGC en limiter: hetzelfde punt als de niveaumeter"
+  de: "Was der Opus-Encoder bekommt, nach Gain, EQ, Kompressor, AGC und Limiter: derselbe Punkt wie die Pegelanzeige"
+  fr: "Ce que reçoit l'encodeur Opus, après gain, EQ, compresseur, AGC et limiteur : le même point que l'indicateur de niveau"
+dev_txspec_live:
+  en: "Live"
+  nl: "Live"
+  de: "Live"
+  fr: "Direct"
+dev_txspec_over:
+  en: "Last over"
+  nl: "Laatste doorgang"
+  de: "Letzter Durchgang"
+  fr: "Dernier passage"
+dev_txspec_over_hover:
+  en: "The average spectrum of the whole last transmission, kept after release; a roger beep is not in it"
+  nl: "Het gemiddelde spectrum van de hele laatste doorgang, blijft staan na het loslaten; een rogerpiep zit er niet in"
+  de: "Das mittlere Spektrum des ganzen letzten Durchgangs, bleibt nach dem Loslassen stehen; ein Roger-Piep ist nicht dabei"
+  fr: "Le spectre moyen de tout le dernier passage, conservé après le relâchement ; un bip de fin n'y est pas"
+dev_txspec_peak:
+  en: "Peak hold"
+  nl: "Piekwaarde"
+  de: "Spitzenwert"
+  fr: "Crête"
+dev_txspec_peak_hover:
+  en: "The highest level per frequency during the last over"
+  nl: "Het hoogste niveau per frequentie tijdens de laatste doorgang"
+  de: "Der höchste Pegel pro Frequenz während des letzten Durchgangs"
+  fr: "Le niveau le plus haut par fréquence pendant le dernier passage"
+dev_txspec_eq_hover:
+  en: "The response of the EQ that sounds, on its own scale at the right"
+  nl: "De respons van de EQ die klinkt, op een eigen schaal rechts"
+  de: "Der Frequenzgang des aktiven EQ, auf eigener Skala rechts"
+  fr: "La réponse de l'EQ actif, sur sa propre échelle à droite"
+dev_txspec_log:
+  en: "Log"
+  nl: "Log"
+  de: "Log"
+  fr: "Log"
+dev_txspec_log_hover:
+  en: "A logarithmic frequency axis, from 50 Hz"
+  nl: "Een logaritmische frequentieas, vanaf 50 Hz"
+  de: "Eine logarithmische Frequenzachse, ab 50 Hz"
+  fr: "Un axe de fréquence logarithmique, à partir de 50 Hz"
+dev_txspec_eq_wav:
+  en: "EQ: not on a WAV"
+  nl: "EQ: niet op een WAV"
+  de: "EQ: nicht bei einer WAV"
+  fr: "EQ : pas sur un WAV"
+dev_txspec_resize:
+  en: "Drag to make the spectrum taller or lower"
+  nl: "Sleep om het spectrum hoger of lager te maken"
+  de: "Ziehen, um das Spektrum höher oder niedriger zu machen"
+  fr: "Faire glisser pour agrandir ou réduire la hauteur du spectre"
+dev_txspec_over_len:
+  en: "Last over:"
+  nl: "Laatste doorgang:"
+  de: "Letzter Durchgang:"
+  fr: "Dernier passage :"
 dev_eq_advanced:
   en: "Advanced"
   nl: "Geavanceerd"

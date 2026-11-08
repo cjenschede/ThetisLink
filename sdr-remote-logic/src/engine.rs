@@ -590,6 +590,9 @@ pub struct ClientEngine {
     state_tx: watch::Sender<RadioState>,
     cmd_rx: mpsc::UnboundedReceiver<Command>,
     quic_relay: Option<sdr_remote_quic::RelayRoute>,
+    /// The transmit spectrum's copy of what the Yaesu encoder takes
+    /// (`tx_tap`), when a screen asked for it.
+    tx_tap: Option<Arc<crate::tx_tap::TxTap>>,
 }
 
 /// Runs the engine thread's body, and if it panics or returns an error, leaves
@@ -640,7 +643,15 @@ impl ClientEngine {
     pub fn new() -> (Self, watch::Receiver<RadioState>, mpsc::UnboundedSender<Command>) {
         let (state_tx, state_rx) = watch::channel(RadioState::default());
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        (Self { state_tx, cmd_rx, quic_relay: None }, state_rx, cmd_tx)
+        (Self { state_tx, cmd_rx, quic_relay: None, tx_tap: None }, state_rx, cmd_tx)
+    }
+
+    /// Give the transmit spectrum a copy of each Yaesu frame as it goes to the
+    /// encoder. The copy is made only while the tap is switched on, and never
+    /// holds up the transmit path.
+    pub fn with_tx_tap(mut self, tap: Arc<crate::tx_tap::TxTap>) -> Self {
+        self.tx_tap = Some(tap);
+        self
     }
 
     /// Connect over QUIC through the relay: `grants` are the relay
@@ -665,6 +676,7 @@ impl ClientEngine {
         audio_factory: impl Fn(Option<&str>, Option<&str>) -> Result<Box<dyn AudioBackend>>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
+        let tx_tap = self.tx_tap.take();
         // "Relay only" (build 137): the route's own switch, kept here so a
         // command can throw it while the connection runs. `None` without a relay.
         let relay_only_switch = self.quic_relay.as_ref().map(|r| r.relay_only.clone());
@@ -7053,6 +7065,12 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             // WAV-playback, which share this chain.
                             let (level, pcm_i16) = to_encoder(&resampled, 1.0);
                             state.yaesu_mic_level = level;
+                            // The transmit spectrum takes the same frame as the meter.
+                            if let Some(ref tap) = tx_tap {
+                                use crate::tx_tap::Source;
+                                let source = if roger_here { Source::Roger } else if playback_is_tx { Source::Wav } else { Source::Mic };
+                                tap.push(usize::from(yaesu2_ptt), &pcm_i16, source);
+                            }
                             if !playback_is_tx && !roger_here {
                                 let slot = usize::from(yaesu2_ptt);
                                 let agc_on = if yaesu2_ptt { yaesu2_tx_agc_enabled } else { yaesu_tx_agc_enabled };
@@ -7621,6 +7639,24 @@ mod tests {
             lim.process(&mut f);
         }
         assert!(lim.gain > 0.99, "it lets go: {}", lim.gain);
+    }
+
+    /// The transmit spectrum takes the frame the meter takes: right after
+    /// `to_encoder`, before the encoder, on the Yaesu path only, with the roger
+    /// beep flagged so the last over leaves it out.
+    #[test]
+    fn the_tx_spectrum_taps_where_the_meter_does() {
+        let src = include_str!("engine.rs");
+        let body = &src[..src.find("#[cfg(test)]
+mod tests {").unwrap()];
+        let pos = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        let meter = pos("let (level, pcm_i16) = to_encoder(&resampled, 1.0);");
+        let tap = pos("tap.push(usize::from(yaesu2_ptt), &pcm_i16, source);");
+        let source = pos("let source = if roger_here { Source::Roger } else if playback_is_tx { Source::Wav } else { Source::Mic };");
+        assert!(meter < source && source < tap, "the source is told right at the tap");
+        let encode = pos("yaesu_tx_encoder.encode(&pcm_i16[..FRAME_SAMPLES_WIDEBAND])");
+        assert!(meter < tap && tap < encode);
+        assert_eq!(body.matches("tap.push(").count(), 1, "one tap, on the Yaesu path");
     }
 
     /// The order of the chain: on the raw frame the clip lamp, then the gain at

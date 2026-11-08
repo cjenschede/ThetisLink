@@ -1,10 +1,10 @@
-﻿# ThetisLink v2.13.1: Installatiehandleiding
+﻿# ThetisLink v2.13.2: Installatiehandleiding
 
 ThetisLink is een remote bediening voor Thetis: audio, spectrum, PTT en volledige radiobediening over het netwerk via TCI WebSocket. Welke radio Thetis bedient, is de radio die je bedient: zie de compatibiliteit hieronder.
 
 **Compatibiliteit:** ThetisLink praat alleen met **Thetis** (via TCI WebSocket) en niet rechtstreeks met de SDR-hardware. Werkt daarom met elk SDR-apparaat dat door **Thetis v2.10.3.15** (officiële release door ramdor) ondersteund wordt: zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optioneel: Yaesu FT-991A / FTX-1 als tweede radio (via COM-poort).
 
-**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.13.1 werkt prima met stock Thetis v2.10.3.15 via TCI alleen: er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-gedrag van stock v2.10.3.15 behouden, op een paar fixes van fouten in standaard Thetis na, die altijd gelden (zie de release-notes van de fork). Let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata. Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
+**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.13.2 werkt prima met stock Thetis v2.10.3.15 via TCI alleen: er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-gedrag van stock v2.10.3.15 behouden, op een paar fixes van fouten in standaard Thetis na, die altijd gelden (zie de release-notes van de fork). Let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata. Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
 
 **Disclaimer:** Deze software bestuurt radiozenders. Gebruik op eigen risico. De auteur is niet verantwoordelijk voor schade aan apparatuur, storing of overtredingen van regelgeving als gevolg van het gebruik van deze software. Controleer alle veiligheidsfuncties (PTT timeout, vermogensgrenzen) voor het zenden.
 
@@ -16,7 +16,7 @@ ThetisLink is een remote bediening voor Thetis: audio, spectrum, PTT en volledig
 |---------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server: draait op de PC naast Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client: Windows |
-| ThetisLink-2.13.1.apk | ThetisLink Android Client: telefoon/tablet |
+| ThetisLink-2.13.2.apk | ThetisLink Android Client: telefoon/tablet |
 | Installatie.md, Installatie.pdf | Deze handleiding (Nederlands) |
 | User-Manual.md, User-Manual.pdf | Gebruikershandleiding (Nederlands) |
 | Technische-Referentie.md, Technische-Referentie.pdf | Technische referentie (Nederlands) |
@@ -128,7 +128,7 @@ Geen administrator-rechten nodig voor de ThetisLink Server of ThetisLink Clients
 
 ### 1.0 PA3GHM Thetis fork installeren (aanbevolen)
 
-De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.13.1 werkt het best met Thetis-fork build PA3GHM TL2-18**, die tegelijk met ThetisLink v2.13.0 uitkwam. Eerdere fork-builds werken ook, met minder fork-only features; stock Thetis v2.10.3.15 blijft de fallback. Installatie:
+De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.13.2 werkt het best met Thetis-fork build PA3GHM TL2-18**, die tegelijk met ThetisLink v2.13.0 uitkwam. Eerdere fork-builds werken ook, met minder fork-only features; stock Thetis v2.10.3.15 blijft de fallback. Installatie:
 
 1. Installeer eerst de officiele **Thetis v2.10.3.15** via de standaard installer (als je dat nog niet hebt)
 2. Download `Thetis.exe` en `ChannelMaster.dll` van de PA3GHM fork: **release `TL2-18`** op [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
@@ -235,7 +235,7 @@ Voor Yaesu audio: selecteer in de ThetisLink Server GUI bij het Yaesu apparaat *
 >
 > Zonder deze stap blijft de audio helder, maar verdwijnt de ruis onnatuurlijk. Dit wordt door Windows veroorzaakt, niet door ThetisLink.
 
-> **Ontvangstniveau van de radio's (aanbevolen).** De USB-geluidskaart van een radio levert veel minder dan Thetis, en bij de fabrieksniveaus vullen de clients dat aan met een grote correctie, die ook de eigen ruis van de geluidskaart ophaalt. Ingesteld zoals hieronder werkt elke radio zijn geluidskaart rond het beste niveau en hebben de clients maar een kleine stap nodig. **Doe deze drie stappen pas als de server en elke client 2.13.1 zijn**: een 2.13.0-client, of een 2.13.1-client op een 2.13.0-server, houdt de grote correctie en speelt radio's die zo zijn ingesteld veel te hard (een FTX-1 ongeveer 22 dB).
+> **Ontvangstniveau van de radio's (aanbevolen).** De USB-geluidskaart van een radio levert veel minder dan Thetis, en bij de fabrieksniveaus vullen de clients dat aan met een grote correctie, die ook de eigen ruis van de geluidskaart ophaalt. Ingesteld zoals hieronder werkt elke radio zijn geluidskaart rond het beste niveau en hebben de clients maar een kleine stap nodig. **Doe deze drie stappen pas als de server en elke client 2.13.1 of nieuwer zijn**: een 2.13.0-client, of een 2.13.1-client op een 2.13.0-server, houdt de grote correctie en speelt radio's die zo zijn ingesteld veel te hard (een FTX-1 ongeveer 22 dB).
 >
 > 1. **FT-991A**: zet in het menu van de radio **107 SSB OUT LEVEL** op **100**, en hetzelfde voor de andere modes die je gebruikt (**046** AM, **075** FM, **073** DATA, **054** CW, **099** RTTY). Zet in Windows het opnameniveau van *USB Audio CODEC* op het punt waar Windows niets versterkt en niets verzwakt (0 dB). Windows toont dat punt niet; op de pc waarop dit is gemeten was het 54 van 100.
 > 2. **FTX-1**: zet in Windows het opnameniveau van *USB Audio Device* op het **maximum**. Zet in de serverinstellingen **FTX-1-audio** op de ontvanger waar je naar luistert (*Ontvanger 1 (links)* of *Ontvanger 2 (rechts)*) in plaats van *Beide gemengd*: met de andere ontvanger stil kost mengen 6 dB. (De eigen *USB OUT LEVEL* van de radio had op de radio waarop dit is gemeten geen effect.)
@@ -347,14 +347,14 @@ Als de server zelf op de Thetis-PC draait, heeft zijn venster twee tabs: **Statu
 > Instellingen bij de processor- of systeeminformatie.
 
 **Via bestandsbeheer:**
-1. Kopieer `ThetisLink-2.13.1.apk` naar je telefoon (USB, e-mail, of cloud)
+1. Kopieer `ThetisLink-2.13.2.apk` naar je telefoon (USB, e-mail, of cloud)
 2. Open het APK-bestand op de telefoon
 3. Sta "Installeren van onbekende bronnen" toe als gevraagd
 4. Installeer
 
 **Via ADB** (met USB-debugging ingeschakeld):
 ```
-adb install ThetisLink-2.13.1.apk
+adb install ThetisLink-2.13.2.apk
 ```
 
 ### 4.2 Verbinden: begeleide setup-wizard

@@ -70,7 +70,7 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 | Yaesu FTX-1 | Serial CAT + USB Audio |
 | RF2K-S Power Amplifier | HTTP API |
 | SPE Expert 1.3K-FA | Serial |
-| StockCorner JC-4s / JC-3s Antenna Tuner (×2) | MCP2221A USB-HID |
+| StockCorner JC-4s / JC-3s Antenna Tuner (up to 6) | MCP2221A USB-HID |
 | UltraBeam RCU-06 | Serial |
 | Amplitec 6/2 Antenna Switch | Serial |
 | EA7HG Visual Rotor | UDP |

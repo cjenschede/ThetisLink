@@ -389,20 +389,17 @@ private fun TunerTab(
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
     // Status
-    val oliveGreen = Color(0xFF78A028)
     val stateText = when (state.tunerState) {
         1 -> "Tuning..."
         2 -> "Tune OK"
         3 -> "Timeout"
         4 -> "Aborted"
-        5 -> "Done~ (already tuned)"
         else -> "Idle"
     }
     val stateColor = when (state.tunerState) {
         1 -> Color(0xFF3C78DC) // Blue
         2 -> Color(0xFF32B432) // Green
         3, 4 -> amber
-        5 -> oliveGreen
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 
@@ -423,19 +420,17 @@ private fun TunerTab(
 
     // Tune + Abort buttons
     val canStart = state.tunerConnected && state.tunerCanTune
-            && (state.tunerState == 0 || state.tunerState == 2 || state.tunerState == 5)
+            && (state.tunerState == 0 || state.tunerState == 2)
     val tuneColor = when (state.tunerState) {
         1 -> Color(0xFF3C78DC) // Tuning = blue
         2 -> Color(0xFF32B432) // Done OK = green
         3, 4 -> amber // Timeout/Aborted = amber
-        5 -> oliveGreen // Done assumed = olive green
         else -> Color(0xFF505050) // Idle = grey
     }
     val tuneText = when (state.tunerState) {
         1 -> "Tuning..."
         2 -> "Tune OK"
         3, 4 -> "Tune X"
-        5 -> "Tune ~"
         else -> "Tune"
     }
 

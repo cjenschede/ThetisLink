@@ -1,10 +1,10 @@
-# ThetisLink v2.13.1: Technische Referentie
+# ThetisLink v2.13.2: Technische Referentie
 
 ## 1. Overzicht
 
 ThetisLink is een systeem voor het op afstand bedienen van een Thetis SDR-ontvanger (welke radio Thetis ook bedient, bereikt via TCI en nooit rechtstreeks aangesproken) en van maximaal twee rechtstreeks op de server aangesloten Yaesu transceivers (FT-991A / FTX-1), via een netwerkverbinding. Wat een radio biedt is wat Thetis daarvoor biedt: RX2 en diversity vragen een tweede ontvanger, en de spectrumbreedte volgt de samplerate die de radio kan leveren. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over één versleutelde QUIC-verbinding met Opus codec.
 
-**Versie:** v2.13.1 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.13.2 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
 **Doelplatform:** Windows 10/11 en Android 8+ (arm64); macOS (Intel/Apple Silicon) vanaf broncode, experimenteel
 **Ontwerpprioriteit:** latency > bandbreedte > features
@@ -26,9 +26,23 @@ Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setu
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz**, selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.13.1`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.13.2`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.13.2 hoogtepunten
+
+**Het zendspectrum van een Yaesu** (`sdr_remote_logic::tx_tap`, `ui/tx_spectrum.rs` in de
+desktopclient). De motor kopieert elk zendframe van een Yaesu waar de niveaumeter het leest, vlak
+vóór de Opus-encoder, op 16 kHz, alleen zolang een spectrum getekend wordt, en met `try_lock` zodat
+het zendpad nooit wacht. Het scherm doet de FFT (2048 punten): live, en het Welch-gemiddelde en de
+piek van de laatste doorgang, bewaard in blokken van een seconde tot 5 minuten.
+
+**De tuner op een MCP2221A** drukt minstens `min_press_ms` (400 ms), leest waar de gele draad na de
+tune tot rust komt, en meldt Timeout bij of boven `tuned_below_v` (4,5 V); hij drukt niet als de draad
+al laag staat. **Seriële apparaten** (`serial_link`): de UltraBeam en de SPE Expert openen hun poort
+opnieuw na een verloren poort en vinden een apparaat dat na de server aangaat, zoals de Amplitec al
+deed. Niets veranderd op de draad; een 2.13.2-programma praat met een van 2.13.1.
 
 ### v2.13.1 hoogtepunten
 
@@ -665,7 +679,7 @@ sdr-remote/
 | `anyhow` | 1 | Foutafhandeling |
 | `oboe` | 0.6 | Audio I/O (AAudio op Android) |
 | `uniffi` | 0.28 | Rust ↔ Kotlin FFI bridge |
-| `rustfft` | 6 | FFT voor spectrum verwerking (server) |
+| `rustfft` | 6 | FFT voor spectrum verwerking (server; het zendspectrum in de desktopclient) |
 | `tokio-tungstenite` | 0.24 | WebSocket: TCI naar Thetis (server) en wss naar de relay |
 | `futures-util` | 0.3 | StreamExt/SinkExt voor WebSocket (server) |
 | `serialport` | 4.7 | Serieel USB communicatie (apparaten) |
@@ -1927,6 +1941,8 @@ ThetisLink heeft 7 wire-protocol `DeviceType`-waarden (0x01..0x07). Status wordt
 
 6-poorts coax switch met twee onafhankelijke schakelaars (A en B).
 
+**Verbinding:** zoals elk serieel apparaat op de server (Amplitec, UltraBeam, SPE Expert) loopt hij via `serial_link`: de werkdraad opent de poort zelf, opent hem opnieuw als de verbinding weg is, en probeert elke 5 s zolang de poort ontbreekt, ook als het apparaat uit staat bij het starten van de server. Eén waarschuwing per onderbreking, één regel als de poort weer open is maar het apparaat nog niet antwoordt, één regel als hij terug is.
+
 **ThetisLink protocol:**
 - **Status:** switch_a = positie A (1-6), switch_b = positie B (1-6), labels = CSV met positie-namen
 - **Commands:** SetSwitchA (0x01, value=positie 1-6), SetSwitchB (0x02, value=positie 1-6)
@@ -1937,12 +1953,14 @@ Vanaf v2.0.3 worden StockCorner JC-4s / JC-3s tuners (inmiddels tot zes) paralle
 
 **Hardware (per tuner):**
 - GP2 (digital out) → serie-gate-weerstand → transistor (2N7000 / MMBT3904) → grey "start"-draad naar GND.
-- GP1 (ADC) → midpunt 1 MΩ + 1 MΩ 1:1 spanningsdeler op de yellow "tune-status"-draad (idle ≈ 4.5 V, tune-actief ≈ 0 V).
+- GP1 (ADC) → midpunt 1 MΩ + 1 MΩ 1:1 spanningsdeler op de yellow "tune-status"-draad (tune-actief ≈ 0 V; in rust rond 5 V na het inschakelen en duidelijk lager na een tune die echt getuned heeft, tot de tuner zijn voeding verliest: rond 3,3 V bij een gemeten JC-4s, het niveau hangt af van de tuner en de bedrading).
 - Volledige wiring-schema's met componentwaardes en BJT/MOSFET-varianten: zie de interne MCP2221A-JC4s wiring reference (beschikbaar op aanvraag bij PA3GHM).
 
 **Native library:** `mcp2221-hal` v0.1.0: vendored als `vendor/mcp2221-hal/`, dual-licensed `MIT OR Apache-2.0`; ThetisLink kiest de MIT-tak (Apache-2.0 ↔ GPL-2.0-only incompatible). Zie `NOTICE.md` en `compliance/THIRD-PARTY-LICENSES.html` voor attributie.
 
 **Tune aan/uit** gaat naar Thetis via TCI `tune:0,true;` / `tune:0,false;` (doorgestuurd via een tokio channel).
+
+**Tune-volgorde:** staat de gele draad vóór de druk al onder de actieve rand (de tuner staat uit, bijna 0 V, of is bezig), dan doet de server niets en meldt hij Timeout. Anders gaat de eindtrap naar Standby; GP2 gaat hoog (de startknop) en blijft hoog tot de gele draad zakt (de ACK van de tuner) **én** de druk `min_press_ms` heeft geduurd (direct na het inschakelen wil een JC-Control een druk van ongeveer een kwart seconde); dan gaat de draaggolf aan en wacht de server tot de gele draad weer stijgt. Een stijging eerder dan `min_tune_ms` na de druk telt niet als einde. Na de stijging komt de draad 300 ms tot rust: op of boven `tuned_below_v` heeft de tuner niet getuned en wordt de toestand Timeout, eronder DoneOk. De draaggolf gaat uit en de eindtrap terug naar Operate, in beide gevallen. De serverlog toont per tune het niveau vóór de druk, het moment van loslaten en het niveau in rust.
 
 **Tuner states:**
 
@@ -1951,7 +1969,7 @@ Vanaf v2.0.3 worden StockCorner JC-4s / JC-3s tuners (inmiddels tot zes) paralle
 | Idle | 0 | Geen tune actief | Grijs |
 | Tuning | 1 | Tune bezig | Blauw |
 | DoneOk | 2 | Tune succesvol | Groen |
-| Timeout | 3 | Geen ACK binnen 3s of geen complete binnen 30s | Amber (3s, dan Idle) |
+| Timeout | 3 | Geen ACK binnen 3s, geen complete binnen 30s, niet getuned (de gele draad kwam tot rust op of boven `tuned_below_v`), of niet klaar (de draad al laag vóór de druk) | Amber (3s, dan Idle) |
 | Aborted | 4 | Gebruiker afgebroken | Amber (3s, dan Idle) |
 
 State `5` (DoneAssumed) bestond in v2.0.2 voor de assume-tuned compensatie en is in v2.0.3 verwijderd; oude clients die nog state 5 verwachten zien dit nooit meer van een v2.0.3 server.
@@ -1963,6 +1981,9 @@ State `5` (DoneAssumed) bestond in v2.0.2 voor de assume-tuned compensatie en is
 - `tuner<N>_amplitec_pos`: Amplitec-A positie (1..6) waarachter de tuner fysiek hangt
 - `tuner<N>_threshold_v`: switch-niveau op de gele draad (default 2.25 V)
 - `tuner<N>_hysteresis_v`: dood-band rond de threshold (default 0.50 V)
+- `tuner<N>_min_press_ms`: minimale druk op de startknop, gerekend vanaf de druk, nooit los vóór de ACK (default 400 ms, 0 tot 2000; 0 = los op de ACK)
+- `tuner<N>_min_tune_ms`: hoe lang na de druk een stijging van de gele draad als einde van de tune mag tellen (default 0, tot 10000); het stelt uit, het beoordeelt niet
+- `tuner<N>_tuned_below_v`: de gele draad moet na een tune onder dit niveau tot rust komen om als getuned te tellen (default 4,5 V, 0 tot 6,0; 0 = geen controle). Bij DoneOk zet een niveau op of erboven (de tuner is uit en weer aan gezet) de toestand terug naar Idle
 - `mcp2221_section_expanded`: open/dicht-stand van het status-paneel MCP-blok
 
 Legacy v2.0.2 keys (`tuner_assume_tuned`, `tuner{1,2}_assume_tuned`, `threshold_ratio`, `baseline_override`) worden stilzwijgend genegeerd bij inlezen: bestaande config-files breken niet.
@@ -1976,6 +1997,8 @@ Legacy v2.0.2 keys (`tuner_assume_tuned`, `tuner{1,2}_assume_tuned`, `threshold_
 ### SPE Expert 1.3K-FA Eindversterker
 
 Lineaire eindversterker, 1300W.
+
+**Verbinding:** zoals elk serieel apparaat op de server (Amplitec, UltraBeam, SPE Expert) loopt hij via `serial_link`: de werkdraad opent de poort zelf, opent hem opnieuw als de verbinding weg is, en probeert elke 5 s zolang de poort ontbreekt, ook als het apparaat uit staat bij het starten van de server. Eén waarschuwing per onderbreking, één regel als de poort weer open is maar het apparaat nog niet antwoordt, één regel als hij terug is. Hij wordt alleen opnieuw geopend bij een harde I/O-fout (de poort verloren); een eindtrap die uit staat maar aan de USB hangt, geeft alleen time-outs en houdt zijn poort, want het openen kan RTS bewegen en een RTS-puls zet de eindtrap aan.
 
 **Hardware protocol:** Eigen binair protocol met `0xAA 0xAA` preamble + command byte + data + XOR checksum.
 
@@ -2010,6 +2033,8 @@ RF2K-S (RFKIT) solid-state eindversterker.
 ### UltraBeam RCU-06 Antennecontroller
 
 Controller voor UltraBeam stuurbare Yagi-antenne. Bestuurt elementlengtes via stappenmotoren over een lange (typisch 50 m) kabel naar de mast. De RCU-06 zelf houdt de motorposities bij via encoders op die kabel; ThetisLink relayt enkel gebruikerscommando's en leest status terug.
+
+**Verbinding:** zoals elk serieel apparaat op de server (Amplitec, UltraBeam, SPE Expert) loopt hij via `serial_link`: de werkdraad opent de poort zelf, opent hem opnieuw als de verbinding weg is, en probeert elke 5 s zolang de poort ontbreekt, ook als het apparaat uit staat bij het starten van de server. Eén waarschuwing per onderbreking, één regel als de poort weer open is maar het apparaat nog niet antwoordt, één regel als hij terug is. Hij opent ook opnieuw na zes polls achter elkaar zonder antwoord (ongeveer 15 s).
 
 **Hardware protocol:** Eigen framed binair protocol over RS-232 (USB-serieel, 19200 baud). Frame-format: `STX` (0xF5) + DLE-gequoot (`SEQ`, `COM`, `DAT…`, `CHK`) + `ETX` (0xFA). DLE-byte is `0xF6`. Checksum init `0x55`, per byte `chk = (chk ^ b) + 1` over `SEQ + COM + DAT…`; verificatie ontvangst is "berekening over `SEQ + COM + DAT… + CHK` moet 1 zijn".
 

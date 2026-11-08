@@ -14,6 +14,69 @@ hardware notes, see `Technical-Reference.md` and `User-Manual-EN.md`
 
 ---
 
+## [2.13.2] 2026-11-08 (The transmit spectrum of a Yaesu, a tuner that says when it did not tune, and serial devices that come back)
+
+> **Who this release changes things for.** **Anyone who transmits through a Yaesu
+> from the desktop**: the EQ section shows the transmit spectrum, what the encoder
+> really sends, with the EQ curve over it. **Anyone with a StockCorner tuner on an
+> MCP2221A**: the first tune after switching the tuner on works, a tune that did not
+> tune is reported as failed instead of done, and no tune starts while the tuner is
+> off. **Anyone with an UltraBeam RCU-06 or an SPE Expert on a serial port**: after a
+> re-plugged USB cable, or when the device is switched on after the server, it comes
+> back by itself, as the Amplitec already did. The Android app itself does not change;
+> what it shows of the tuner and the serial devices follows the server.
+>
+> **Works with 2.13.1, in both directions.** Nothing changed in what travels between
+> the programs. You can update one program at a time.
+>
+> **"Tuned below" is on by default, at 4.5 V.** A tune whose yellow wire settles at or
+> above that level counts as failed (Timeout in the tuner block of the clients, Tune X
+> on the tune button, "NOT tuned" in the server log). If your tuner rests higher
+> after a good tune, set the level between the two (the manual says how), or 0 to
+> switch the check off.
+>
+> **Going back to 2.13.1 works.** A 2.13.1 server ignores the three new tuner
+> settings, and drops them the next time it saves its settings: after a new update
+> they start at their defaults again.
+>
+> **Thetis.** Unchanged: stock Thetis v2.10.3.15 suffices, and the fork
+> **PA3GHM TL2-18** from 2.13.0 still applies.
+
+### Added
+
+- **The transmit spectrum of a Yaesu** (desktop client, in the Equalizer section of
+  each Yaesu): what the Opus encoder takes, after the gain, EQ, compressor, AGC and
+  limiter. **Live** while you transmit, the **last over** as an average (a roger beep
+  left out) with its **peak hold**, and the **EQ** that sounds over it; over a played
+  WAV, which goes out without the EQ, it says so instead of drawing the curve. A
+  logarithmic frequency axis from 50 Hz (or linear), 4 or 8 kHz wide, a plot you can
+  pull taller, and the pointer reads the frequency and the level of each line. The
+  copy is made only while the spectrum is on screen, and the transmit path never
+  waits for it.
+- **Tuner timing per tuner** in the MCP2221A block of the server: a **minimum press**
+  (400 ms by default), a **minimum tune time** (0) and **Tuned below** (4.5 V), each
+  with a field to type the value.
+
+### Changed
+
+- **The first tune after switching a StockCorner tuner on works.** Right after
+  power-on the JC-Control needs a press of about a quarter second; the start button is
+  now held for at least 400 ms, counted from the press.
+- **A tune that did not tune is reported as failed.** After the tune the server reads
+  where the yellow wire comes to rest: at or above **Tuned below** it was not a tune.
+  A **Tune OK** goes back to idle when the wire rests that high again (the tuner was
+  switched off and on again).
+- **No tune while the tuner is off or busy.** With the yellow wire already low before
+  the press, the server does not press and does not key the carrier, reports Timeout
+  and says why in its log.
+- **The UltraBeam and the SPE Expert reconnect by themselves**, through the same
+  block as the Amplitec: after a re-plugged USB cable, and when they are switched on
+  after the server started. After a re-plugged cable the log says once that the device
+  is lost and when it is back. A device that moved to a new COM number needs a server
+  restart.
+- **The five lines of the tuner log in the server window are in English**; they were in
+  Dutch whatever the language of the server.
+
 ## [2.13.1] 2026-11-05 (A direct connection outlives the relay, the transmit gain is set in dB, and Windows needs nothing extra)
 
 > **Who this release changes things for.** **Anyone who connects through the
