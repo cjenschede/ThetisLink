@@ -101,7 +101,15 @@ pub(crate) struct ChannelSpectrum {
     /// The band of the frequency this channel listens on, as `update_auto_ref`
     /// last saw it: a change restarts the fast phase (build 238).
     auto_ref_band: Option<String>,
+    /// The level last handed to the caller: it only moves when the derived
+    /// value is `AUTO_REF_STEP_DB` or more away from it.
+    auto_ref_shown: Option<f32>,
 }
+
+/// How far the derived auto-ref may drift from the level on screen before the
+/// screen follows. The derivation creeps towards its target on every frame;
+/// handing each creep on made the waterfall draw itself whole every frame.
+pub(crate) const AUTO_REF_STEP_DB: f32 = 1.0;
 
 impl ChannelSpectrum {
     pub(crate) fn new(channel: ChannelId) -> Self {
@@ -125,6 +133,7 @@ impl ChannelSpectrum {
             auto_ref_initialized: false,
             auto_ref_state: AutoRefState::NoData,
             auto_ref_band: None,
+            auto_ref_shown: None,
         }
     }
 
@@ -223,6 +232,7 @@ impl ChannelSpectrum {
         self.auto_ref_frames = 0;
         self.auto_ref_initialized = false;
         self.auto_ref_state = AutoRefState::NoData;
+        self.auto_ref_shown = None;
     }
 
     /// Per-VRX S-meter: integrate spectrum power over the SSB passband with
@@ -344,6 +354,10 @@ impl ChannelSpectrum {
     /// its own filter edges. Before this was shared, RX1, RX2 and both VRX
     /// channels each carried their own copy of this loop - the same arithmetic
     /// four times, differing only in which band it skipped.
+    ///
+    /// The level it returns holds still until the derivation is
+    /// `AUTO_REF_STEP_DB` away from it, and after a restart (band change,
+    /// "auto" switched on) the first value comes through at once.
     pub(crate) fn update_auto_ref(
         &mut self,
         enabled: bool,
@@ -404,7 +418,12 @@ impl ChannelSpectrum {
         } else {
             AutoRefState::Settled
         };
-        Some(self.auto_ref_value)
+        let shown = match self.auto_ref_shown {
+            Some(shown) if (self.auto_ref_value - shown).abs() < AUTO_REF_STEP_DB => shown,
+            _ => self.auto_ref_value,
+        };
+        self.auto_ref_shown = Some(shown);
+        Some(shown)
     }
 
     /// Observability: compact per-channel state for a log line.
@@ -490,6 +509,68 @@ mod boundary_guard {
         }
         let sync = include_str!("sync_state.rs");
         assert_eq!(sync.matches("reset_auto_ref()").count(), 0, "one place restarts on a band change");
+    }
+
+    /// The level handed on holds still while the derivation creeps, follows
+    /// once the derivation is a step away, and comes through at once after a
+    /// restart (build 23 of 2.13.3-dev). Each channel alike.
+    #[test]
+    fn the_auto_ref_moves_in_steps_of_at_least_one_db() {
+        use super::AUTO_REF_STEP_DB;
+        assert_eq!(AUTO_REF_STEP_DB, 1.0, "the step the owner chose");
+        let center = 14_200_000u32;
+        for ch in [ChannelId::Rx1, ChannelId::Rx2, ChannelId::Vrx1, ChannelId::Vrx2] {
+            let mut cs = seeded(ch, center, 192_000);
+            let first = cs.update_auto_ref(true, center as u64, -3_000, 3_000, 60.0).unwrap();
+            assert_eq!(first, cs.auto_ref_value, "{ch:?}: the first value comes through at once");
+            // The floor rises, then falls back: the derivation creeps after it
+            // on every frame, and the screen follows in steps, both ways.
+            let mut shown = first;
+            for (sequence, offset, rising) in [(2u16, 9_000i32, true), (3, 0, false)] {
+                let bins: Vec<u16> = (0..512u16).map(|i| ((10_000 + i as i32 * 40) + offset).clamp(0, 65_535) as u16).collect();
+                cs.ingest(SpectrumSnapshot { channel: ch, bins, center_hz: center, span_hz: 192_000, sequence });
+                let start = shown;
+                let (mut crept, mut followed) = (0, 0);
+                for frame in 0..3_000 {
+                    let before = cs.auto_ref_value;
+                    let now = cs.update_auto_ref(true, center as u64, -3_000, 3_000, 60.0).unwrap();
+                    if cs.auto_ref_value != before {
+                        crept += 1;
+                    }
+                    assert!((now - cs.auto_ref_value).abs() < AUTO_REF_STEP_DB, "{ch:?} frame {frame}: within a step");
+                    if now != shown {
+                        assert!((now - shown).abs() >= AUTO_REF_STEP_DB, "{ch:?} frame {frame}: {shown} to {now}");
+                        followed += 1;
+                        shown = now;
+                    }
+                }
+                assert!(crept > 1_000, "{ch:?}: the derivation crept {crept} times");
+                assert!(followed >= 5 && followed < 60, "{ch:?}: the screen followed {followed} times");
+                assert_eq!(shown > start + 5.0, rising, "{ch:?}: {start} to {shown}, rising {rising}");
+                assert_eq!(shown < start - 5.0, !rising, "{ch:?}: {start} to {shown}, rising {rising}");
+            }
+            // A pause (a transmission) while the screen lags the derivation:
+            // nothing comes through, and afterwards the level held before it.
+            let lagging: Vec<u16> = (0..512u16).map(|i| (10_000 + i * 40).saturating_add(600)).collect();
+            cs.ingest(SpectrumSnapshot { channel: ch, bins: lagging, center_hz: center, span_hz: 192_000, sequence: 4 });
+            let mut ticks = 0;
+            while (cs.update_auto_ref(true, center as u64, -3_000, 3_000, 60.0).unwrap() - cs.auto_ref_value).abs() < 0.3 {
+                ticks += 1;
+                assert!(ticks < 10_000, "{ch:?}: the screen never lagged");
+            }
+            let before_pause = cs.update_auto_ref(true, center as u64, -3_000, 3_000, 60.0).unwrap();
+            assert!((before_pause - cs.auto_ref_value).abs() >= 0.3, "{ch:?}: the screen lags");
+            for _ in 0..20 {
+                assert_eq!(cs.update_auto_ref(false, center as u64, -3_000, 3_000, 60.0), None, "{ch:?}: paused");
+            }
+            assert_eq!(cs.update_auto_ref(true, center as u64, -3_000, 3_000, 60.0), Some(before_pause), "{ch:?}: the level from before the pause");
+            // Second pass, through a restart: to another band, where the first
+            // value comes through at once, and back.
+            for freq in [7_100_000u64, center as u64] {
+                let restarted = cs.update_auto_ref(true, freq, -3_000, 3_000, 60.0).unwrap();
+                assert_eq!(restarted, cs.auto_ref_value, "{ch:?}: at once after the band change to {freq}");
+            }
+        }
     }
 
     #[test]

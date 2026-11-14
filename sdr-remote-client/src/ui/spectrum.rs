@@ -465,12 +465,12 @@ pub(crate) fn spectrum_panel_view(
     panel: &SpectrumPanel,
     wf: &WaterfallRingBuffer,
     wf_window: WaterfallWindow,
-    texture: &mut Option<egui::TextureHandle>,
+    image: &mut WaterfallImage,
     plot_height: f32,
     wf_height: f32,
 ) -> Option<SpectrumAction> {
     let from_plot = spectrum_plot(ui, panel, plot_height);
-    let from_wf = spectrum_waterfall(ui, ctx, panel, wf, wf_window, texture, wf_height);
+    let from_wf = spectrum_waterfall(ui, ctx, panel, wf, wf_window, image, wf_height);
     from_plot.or(from_wf)
 }
 
@@ -857,34 +857,109 @@ pub(crate) fn spectrum_plot(ui: &mut egui::Ui, panel: &SpectrumPanel, plot_heigh
     action
 }
 
-/// The waterfall of a panel. Each row shows its own extracted view where it
-/// reaches and the wide row underneath elsewhere, so the history fills in
-/// after tuning; a pixel no row reaches is left clear. Click, drag and scroll
-/// tune, as on the plot.
-pub(crate) fn spectrum_waterfall(
-    ui: &mut egui::Ui,
-    ctx: &egui::Context,
-    panel: &SpectrumPanel,
+/// One panel's waterfall picture, kept from frame to frame. Its pixels are
+/// drawn again only where something changed: the rows that arrived since the
+/// last frame when nothing else moved, the whole picture when the window, the
+/// width, the levels or the buffer did, and nothing at all otherwise. Drawing
+/// every row on every frame, with a power per pixel, took most of a core, also
+/// with the window minimised.
+#[derive(Default)]
+pub(crate) struct WaterfallImage {
+    texture: Option<egui::TextureHandle>,
+    pixels: Vec<u8>,
+    drawn: Option<(WaterfallLook, u64)>,
+    colors: Option<(WaterfallLevels, Vec<[u8; 4]>)>,
+}
+
+/// What a pixel's colour depends on besides its bins.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct WaterfallLevels {
+    ref_db: f32,
+    range_db: f32,
+    contrast: f32,
+}
+
+/// Everything the picture depends on besides the rows themselves.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct WaterfallLook {
+    buffer: u64,
+    out_width: usize,
+    rows: usize,
+    center_hz: f64,
+    span_hz: f64,
+    row_span_hz: f64,
+    levels: WaterfallLevels,
+}
+
+impl WaterfallImage {
+    /// Bring the pixels up to date with the buffer; true when they changed.
+    fn update(&mut self, wf: &WaterfallRingBuffer, window: WaterfallWindow, levels: WaterfallLevels, out_width: usize) -> bool {
+        let rows = wf.height.max(1);
+        let look = WaterfallLook {
+            buffer: wf.id,
+            out_width,
+            rows,
+            center_hz: window.center_hz,
+            span_hz: window.span_hz,
+            row_span_hz: window.row_span_hz,
+            levels,
+        };
+        let arrived = match self.drawn {
+            Some((drawn, pushes)) if drawn == look => wf.pushes.wrapping_sub(pushes),
+            _ => u64::MAX,
+        };
+        if arrived == 0 {
+            return false;
+        }
+        if self.colors.as_ref().map(|(l, _)| *l) != Some(levels) {
+            self.colors = Some((levels, waterfall_colors(levels)));
+        }
+        let row_bytes = out_width * 4;
+        let fresh = if arrived < rows as u64 {
+            // Every row drawn before moves down by the rows that arrived; only
+            // those are drawn.
+            let n = arrived as usize;
+            self.pixels.copy_within(0..(rows - n) * row_bytes, n * row_bytes);
+            self.pixels[..n * row_bytes].fill(0);
+            n
+        } else {
+            self.pixels = vec![0u8; out_width * rows * 4];
+            rows
+        };
+        let colors = self.colors.as_ref().map(|(_, c)| c.as_slice()).unwrap_or(&[]);
+        draw_waterfall_rows(&mut self.pixels, out_width, wf, window, colors, fresh);
+        self.drawn = Some((look, wf.pushes));
+        true
+    }
+}
+
+/// The colour of every packed bin value at these levels: the same sum the
+/// waterfall did per pixel, done once per value.
+fn waterfall_colors(levels: WaterfallLevels) -> Vec<[u8; 4]> {
+    (0..=u16::MAX)
+        .map(|v| {
+            let db = sdr_remote_core::unpack_spectrum_db(v);
+            let frac = ((levels.ref_db - db) / levels.range_db).clamp(0.0, 1.0);
+            let level = (1.0 - frac).powf(1.0 / levels.contrast).clamp(0.0, 1.0);
+            let (r, g, b) = spectrum_level_color(level);
+            [r, g, b, 255]
+        })
+        .collect()
+}
+
+/// Draw the newest `fresh` rows of the buffer into the top of `pixels`, newest
+/// first. A pixel no row reaches is left as it is (clear).
+fn draw_waterfall_rows(
+    pixels: &mut [u8],
+    out_width: usize,
     wf: &WaterfallRingBuffer,
     window: WaterfallWindow,
-    texture: &mut Option<egui::TextureHandle>,
-    display_height: f32,
-) -> Option<SpectrumAction> {
-    let width = ui.available_width();
-    let display_height = display_height.max(40.0);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, display_height), egui::Sense::click_and_drag());
-    let response = response.on_hover_text(rust_i18n::t!("spec_wf_hover").to_string());
-    if wf.count == 0 || window.span_hz <= 0.0 {
-        return None;
-    }
-
-    let rows = wf.height.max(1);
-    let out_width = (width.max(1.0) as usize).min(1024);
-    let mut pixels = vec![0u8; out_width * rows * 4];
+    colors: &[[u8; 4]],
+    fresh: usize,
+) {
     let start_hz = window.center_hz - window.span_hz / 2.0;
     let px_hz_step = window.span_hz / out_width as f64;
-    let contrast = panel.wf_contrast.max(0.1);
-    for row in 0..rows.min(wf.count) {
+    for row in 0..fresh.min(wf.count) {
         let src = (wf.write_idx + wf.height - 1 - row) % wf.height;
         let row_full = &wf.full_rows[src];
         let row_full_center = wf.full_centers[src] as f64;
@@ -919,21 +994,45 @@ pub(crate) fn spectrum_waterfall(
                 let b1c = (b1 as usize).min(row_full.len());
                 (b0c..b1c).map(|j| row_full[j]).max().unwrap_or(0)
             };
-            let db = sdr_remote_core::unpack_spectrum_db(max_val);
-            let frac = ((panel.ref_db - db) / panel.range_db).clamp(0.0, 1.0);
-            let level = (1.0 - frac).powf(1.0 / contrast).clamp(0.0, 1.0);
-            let (r, g, b) = spectrum_level_color(level);
             let idx = dst + px * 4;
-            pixels[idx..idx + 4].copy_from_slice(&[r, g, b, 255]);
+            pixels[idx..idx + 4].copy_from_slice(&colors[max_val as usize]);
         }
     }
-    let image = egui::ColorImage::from_rgba_unmultiplied([out_width, rows], &pixels);
-    match texture {
-        Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
-        None => *texture = Some(ctx.load_texture(format!("waterfall_{}", panel.id), image, egui::TextureOptions::LINEAR)),
+}
+
+/// The waterfall of a panel. Each row shows its own extracted view where it
+/// reaches and the wide row underneath elsewhere, so the history fills in
+/// after tuning; a pixel no row reaches is left clear. Click, drag and scroll
+/// tune, as on the plot.
+pub(crate) fn spectrum_waterfall(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    panel: &SpectrumPanel,
+    wf: &WaterfallRingBuffer,
+    window: WaterfallWindow,
+    image: &mut WaterfallImage,
+    display_height: f32,
+) -> Option<SpectrumAction> {
+    let width = ui.available_width();
+    let display_height = display_height.max(40.0);
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, display_height), egui::Sense::click_and_drag());
+    let response = response.on_hover_text(rust_i18n::t!("spec_wf_hover").to_string());
+    if wf.count == 0 || window.span_hz <= 0.0 {
+        return None;
+    }
+
+    let start_hz = window.center_hz - window.span_hz / 2.0;
+    let out_width = (width.max(1.0) as usize).min(1024);
+    let levels = WaterfallLevels { ref_db: panel.ref_db, range_db: panel.range_db, contrast: panel.wf_contrast.max(0.1) };
+    if image.update(wf, window, levels, out_width) {
+        let picture = egui::ColorImage::from_rgba_unmultiplied([out_width, wf.height.max(1)], &image.pixels);
+        match &mut image.texture {
+            Some(tex) => tex.set(picture, egui::TextureOptions::LINEAR),
+            None => image.texture = Some(ctx.load_texture(format!("waterfall_{}", panel.id), picture, egui::TextureOptions::LINEAR)),
+        }
     }
     if ui.is_rect_visible(rect) {
-        if let Some(tex) = texture.as_ref() {
+        if let Some(tex) = image.texture.as_ref() {
             let uv = egui::Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
             ui.painter_at(rect).image(tex.id(), rect, uv, Color32::WHITE);
         }
@@ -1209,7 +1308,7 @@ mod fill_tests {
         let block = &after[..after.find("let hz_of").unwrap()];
         assert!(!block.contains("painter"), "nothing over the waterfall: {block}");
         assert!(!block.contains("vline") && !block.contains("line_segment"));
-        assert!(draw.contains("let mut pixels = vec![0u8; out_width * rows * 4];"), "clear where no row reaches");
+        assert!(draw.contains("self.pixels = vec![0u8; out_width * rows * 4];"), "clear where no row reaches");
         assert!(!draw.contains("from_rgb(8, 10, 20)"), "no background of its own");
     }
 
@@ -1381,5 +1480,177 @@ mod view_limit_tests {
         assert_eq!(load.matches("v.clamp(*crate::ui::spectrum::REF_DB_RANGE.start(), *crate::ui::spectrum::REF_DB_RANGE.end())").count(), 2);
         assert_eq!(load.matches("v.clamp(*crate::ui::spectrum::RANGE_DB_RANGE.start(), *crate::ui::spectrum::RANGE_DB_RANGE.end())").count(), 2);
         assert_eq!(load.matches("clamp(*crate::ui::spectrum::WF_CONTRAST_RANGE.start(), *crate::ui::spectrum::WF_CONTRAST_RANGE.end())").count(), 3);
+    }
+}
+
+#[cfg(test)]
+mod waterfall_image_tests {
+    use super::{waterfall_colors, spectrum_level_color, WaterfallImage, WaterfallLevels, WaterfallWindow};
+    use crate::ui::WaterfallRingBuffer;
+
+    const WIDTH: usize = 64;
+    const LEVELS: WaterfallLevels = WaterfallLevels { ref_db: -40.0, range_db: 90.0, contrast: 1.7 };
+    const WINDOW: WaterfallWindow = WaterfallWindow { center_hz: 7_100_000.0, span_hz: 96_000.0, row_span_hz: 192_000.0 };
+
+    /// A row that differs from the next, with or without an extracted view,
+    /// and sometimes off to the side of the window.
+    fn push_row(wf: &mut WaterfallRingBuffer, i: u32) {
+        let full: Vec<u16> = (0..256u32).map(|b| ((b * 977 + i * 7919) % 65_536) as u16).collect();
+        let center = 7_100_000 + (i % 5) * 20_000;
+        let sequence = (i % 60_000) as u16 + 1;
+        if i % 3 == 0 {
+            // The path RX1 and RX2 take with the full row off, and the VRX.
+            wf.push_full_only(&full, center, 192_000, sequence);
+        } else {
+            let view: Vec<u16> = (0..128u32).map(|b| ((b * 131 + i * 65_521) % 65_536) as u16).collect();
+            wf.push(&full, center, 192_000, sequence, &view, 7_100_000, 96_000);
+        }
+    }
+
+    fn drawn_at_once(wf: &WaterfallRingBuffer, window: WaterfallWindow, levels: WaterfallLevels) -> Vec<u8> {
+        let mut fresh = WaterfallImage::default();
+        assert!(fresh.update(wf, window, levels, WIDTH));
+        fresh.pixels
+    }
+
+    /// The picture kept from frame to frame, with only the new rows drawn, is
+    /// the picture drawn whole: before the buffer is full, across its wrap,
+    /// with one row or several between two frames, and with as many as it holds.
+    #[test]
+    fn rows_drawn_as_they_arrive_are_the_picture_drawn_whole() {
+        let mut wf = WaterfallRingBuffer::new(50);
+        let mut kept = WaterfallImage::default();
+        let mut i = 0u32;
+        for between in [1u32, 1, 2, 3, 1, 7, 1, 49, 1, 50, 1, 51, 2, 1, 120, 1, 1] {
+            for _ in 0..between {
+                i += 1;
+                push_row(&mut wf, i);
+            }
+            assert!(kept.update(&wf, WINDOW, LEVELS, WIDTH), "after {i}: new rows are drawn");
+            assert!(kept.pixels == drawn_at_once(&wf, WINDOW, LEVELS), "after {i} rows ({between} at once)");
+            // Second pass: nothing arrived, so nothing is drawn, and the picture stays.
+            assert!(!kept.update(&wf, WINDOW, LEVELS, WIDTH), "after {i}: nothing new");
+            assert!(kept.pixels == drawn_at_once(&wf, WINDOW, LEVELS), "after {i}: unchanged");
+        }
+    }
+
+    /// Anything else the picture depends on draws it whole, and the result is
+    /// the picture as it would be drawn fresh: each one changed on its own,
+    /// from the same picture, with and without a row arriving at the same time.
+    #[test]
+    fn a_change_of_window_width_or_levels_draws_it_whole() {
+        let windows = [
+            WaterfallWindow { center_hz: WINDOW.center_hz + 3_000.0, ..WINDOW },
+            WaterfallWindow { span_hz: 48_000.0, ..WINDOW },
+            WaterfallWindow { row_span_hz: 96_000.0, ..WINDOW },
+        ];
+        let levels = [
+            WaterfallLevels { ref_db: -60.0, ..LEVELS },
+            WaterfallLevels { range_db: 50.0, ..LEVELS },
+            WaterfallLevels { contrast: 0.5, ..LEVELS },
+        ];
+        let mut changes: Vec<(WaterfallWindow, WaterfallLevels, usize)> = Vec::new();
+        changes.extend(windows.iter().map(|w| (*w, LEVELS, WIDTH)));
+        changes.extend(levels.iter().map(|l| (WINDOW, *l, WIDTH)));
+        changes.extend([(WINDOW, LEVELS, WIDTH / 2), (WINDOW, LEVELS, WIDTH + 37)]);
+        for row_too in [false, true] {
+            for (n, &(window, levels, width)) in changes.iter().enumerate() {
+                let mut wf = WaterfallRingBuffer::new(40);
+                for i in 1..=30 {
+                    push_row(&mut wf, i);
+                }
+                let mut kept = WaterfallImage::default();
+                assert!(kept.update(&wf, WINDOW, LEVELS, WIDTH));
+                if row_too {
+                    push_row(&mut wf, 31);
+                }
+                assert!(kept.update(&wf, window, levels, width), "change {n} (row too: {row_too})");
+                let mut fresh = WaterfallImage::default();
+                assert!(fresh.update(&wf, window, levels, width));
+                assert!(kept.pixels == fresh.pixels, "change {n} (row too: {row_too})");
+                assert_eq!(kept.pixels.len(), width * 40 * 4);
+            }
+        }
+    }
+
+    /// A row the buffer refuses (the same sequence number again, as `push` is
+    /// called on every frame) moves nothing: no drawing, the same picture.
+    #[test]
+    fn a_refused_row_moves_nothing() {
+        let mut wf = WaterfallRingBuffer::new(20);
+        for i in 1..=5 {
+            push_row(&mut wf, i);
+        }
+        let mut kept = WaterfallImage::default();
+        assert!(kept.update(&wf, WINDOW, LEVELS, WIDTH));
+        let before = kept.pixels.clone();
+        // The last row's sequence number (6) once more, through `push` and
+        // through `push_full_only`: both refuse a repeat.
+        let full: Vec<u16> = vec![30_000; 256];
+        wf.push(&full, 7_100_000, 192_000, 5 + 1, &[], 0, 0);
+        wf.push_full_only(&full, 7_100_000, 192_000, 5 + 1);
+        assert!(!kept.update(&wf, WINDOW, LEVELS, WIDTH), "nothing new");
+        assert!(kept.pixels == before);
+    }
+
+    /// A few pixels worked out by hand, past the row loop: two bins per pixel
+    /// and the strongest of them, in the full row and in the view, each
+    /// coloured from the table.
+    #[test]
+    fn a_pixel_is_the_strongest_of_its_bins_in_its_colour() {
+        let center = 7_000_000u32;
+        let mut wf = WaterfallRingBuffer::new(4);
+        // Oldest row: the full row only. 8 bins over 8 kHz, 4 pixels of 2 kHz.
+        wf.push(&[100, 5_000, 300, 40_000, 7, 8, 60_000, 2], center, 8_000, 1, &[], 0, 0);
+        // Newest row: the same full row, and a view of 4 bins over the middle
+        // 4 kHz, which the two middle pixels take instead.
+        wf.push(&[100, 5_000, 300, 40_000, 7, 8, 60_000, 2], center, 8_000, 2, &[9, 20_000, 50_000, 3], center, 4_000);
+        let window = WaterfallWindow { center_hz: center as f64, span_hz: 8_000.0, row_span_hz: 8_000.0 };
+        let mut image = WaterfallImage::default();
+        assert!(image.update(&wf, window, LEVELS, 4));
+        let colors = waterfall_colors(LEVELS);
+        let pixel = |row: usize, px: usize| -> [u8; 4] {
+            let i = (row * 4 + px) * 4;
+            [image.pixels[i], image.pixels[i + 1], image.pixels[i + 2], image.pixels[i + 3]]
+        };
+        // Row 0 is the newest.
+        assert_eq!([pixel(0, 0), pixel(0, 1), pixel(0, 2), pixel(0, 3)],
+            [colors[5_000], colors[20_000], colors[50_000], colors[60_000]], "newest row, the view in the middle");
+        assert_eq!([pixel(1, 0), pixel(1, 1), pixel(1, 2), pixel(1, 3)],
+            [colors[5_000], colors[40_000], colors[8], colors[60_000]], "oldest row, the full row only");
+        assert_ne!(colors[5_000], colors[60_000], "more than one colour in the picture");
+        assert_eq!(pixel(2, 0), [0, 0, 0, 0], "no row reaches: clear");
+    }
+
+    /// Another buffer that has taken as many rows (a new one after a reset)
+    /// is not mistaken for the one drawn.
+    #[test]
+    fn another_buffer_with_as_many_rows_is_drawn_whole() {
+        let mut first = WaterfallRingBuffer::new(20);
+        let mut second = WaterfallRingBuffer::new(20);
+        for i in 1..=12 {
+            push_row(&mut first, i);
+            push_row(&mut second, i + 1000);
+        }
+        let mut kept = WaterfallImage::default();
+        assert!(kept.update(&first, WINDOW, LEVELS, WIDTH));
+        assert!(kept.update(&second, WINDOW, LEVELS, WIDTH), "same number of rows, other buffer");
+        assert!(kept.pixels == drawn_at_once(&second, WINDOW, LEVELS));
+    }
+
+    /// The colour table is the sum the waterfall did per pixel before it.
+    #[test]
+    fn the_colour_table_is_the_sum_per_pixel() {
+        for levels in [LEVELS, WaterfallLevels { ref_db: 0.0, range_db: 140.0, contrast: 0.1 }, WaterfallLevels { ref_db: -100.0, range_db: 20.0, contrast: 3.0 }] {
+            let table = waterfall_colors(levels);
+            assert_eq!(table.len(), 65_536);
+            for v in (0..=u16::MAX).step_by(97).chain([0, 1, u16::MAX]) {
+                let db = sdr_remote_core::unpack_spectrum_db(v);
+                let frac = ((levels.ref_db - db) / levels.range_db).clamp(0.0, 1.0);
+                let level = (1.0 - frac).powf(1.0 / levels.contrast).clamp(0.0, 1.0);
+                let (r, g, b) = spectrum_level_color(level);
+                assert_eq!(table[v as usize], [r, g, b, 255], "{v} at {levels:?}");
+            }
+        }
     }
 }

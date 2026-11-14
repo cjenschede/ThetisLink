@@ -1,10 +1,10 @@
-# ThetisLink v2.13.2: Installation Guide
+# ThetisLink v2.14.0: Installation Guide
 
 ThetisLink is a remote control application for Thetis: audio, spectrum, PTT and full radio control over the network via TCI WebSocket. Whatever radio Thetis drives is the radio you operate: see the compatibility note below.
 
 **Compatibility:** ThetisLink talks only to **Thetis** (via TCI WebSocket) and not directly to the SDR hardware. It therefore works with any SDR device supported by **Thetis v2.10.3.15** (official release by ramdor): both HPSDR Protocol 1 (Hermes, Angelia, Orion) and HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optional: Yaesu FT-991A / FTX-1 as a second radio (via COM port).
 
-**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.13.2 works fine with stock Thetis v2.10.3.15 over TCI alone: no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI behaviour of stock v2.10.3.15 is preserved, apart from a few fixes of defects in standard Thetis that always apply (see the fork's release notes). Note that the fork does carry its own build tag, release notes and About metadata. See the User Manual (`User-Manual-EN.md`) for details.
+**PA3GHM Thetis fork (optional, recommended for TL2 extensions):** ThetisLink v2.14.0 works fine with stock Thetis v2.10.3.15 over TCI alone: no separate CAT TCP connection is required. The PA3GHM fork is an **optional** drop-in replacement that adds ThetisLink-specific TL2 `_ex` extensions on top of stock Thetis: extended IQ bandwidth up to 1536 kHz (vs the 384 kHz stock cap), `tci_caps_ex` capability broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset and per-RX DDC-rate push notifications, and diversity auto-null with live circle broadcast. All extensions sit behind the **"ThetisLink extensions"** checkbox in Thetis and are disabled by default; with the checkbox unchecked the TCI behaviour of stock v2.10.3.15 is preserved, apart from a few fixes of defects in standard Thetis that always apply (see the fork's release notes). Note that the fork does carry its own build tag, release notes and About metadata. See the User Manual (`User-Manual-EN.md`) for details.
 
 **Disclaimer:** This software controls radio transmitters. Use at your own risk. The author is not responsible for damage to equipment, interference or violations of regulations resulting from the use of this software. Verify all safety features (PTT timeout, power limits) before transmitting.
 
@@ -16,7 +16,7 @@ ThetisLink is a remote control application for Thetis: audio, spectrum, PTT and 
 |------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server: runs on the PC alongside Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client: Windows |
-| ThetisLink-2.13.2.apk | ThetisLink Android Client: phone/tablet |
+| ThetisLink-2.14.0.apk | ThetisLink Android Client: phone/tablet |
 | Installation.md, Installation.pdf | Installation guide (English, this document) |
 | User-Manual-EN.md, User-Manual-EN.pdf | User manual (English) |
 | Technical-Reference.md, Technical-Reference.pdf | Technical reference (English) |
@@ -128,7 +128,7 @@ No administrator rights required for the ThetisLink Server or ThetisLink Clients
 
 ### 1.0 Installing the PA3GHM Thetis fork (recommended)
 
-The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.13.2 works best with Thetis-fork build PA3GHM TL2-18**, released together with ThetisLink v2.13.0. Earlier fork builds also work, with fewer fork-only features; stock Thetis v2.10.3.15 remains the fallback. Installation:
+The PA3GHM fork is a modified version of Thetis with ThetisLink-specific extensions. **ThetisLink v2.14.0 works best with Thetis-fork build PA3GHM TL2-18**, released together with ThetisLink v2.13.0. Earlier fork builds also work, with fewer fork-only features; stock Thetis v2.10.3.15 remains the fallback. Installation:
 
 1. First install the official **Thetis v2.10.3.15** using the standard installer (if you have not already done so)
 2. Download `Thetis.exe` and `ChannelMaster.dll` from the PA3GHM fork: **release `TL2-18`** at [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
@@ -291,6 +291,29 @@ Only now does `thetislink-server.conf` appear next to the exe, and only now does
 
 Later changes to the server settings are kept by clicking **Save & Start** again.
 
+### 2.9 Server and client on Linux (v2.14.0, in development)
+
+The server and the desktop client also build and run on Linux. There is no Linux download yet: you build them yourself
+from source (it is in the public repository, see the README) with Rust:
+`cargo build --release --bin ThetisLink-Server --bin ThetisLink-Client`. Among other things this needs `pkg-config`, a
+C compiler and the development packages of ALSA, libudev and OpenSSL; Opus through `pkg-config`, or else it builds Opus
+itself and then CMake is needed too. The desktop client also needs GTK 3 and WebKitGTK 4.1. This list has not been
+checked on a bare machine.
+
+Thetis does not run on Linux. The server on Linux works together with **hpsdr-rs**, a TCI server for HPSDR radios by
+another author. Both are still in development and not finished. The basics work: receiving, transmitting, the
+spectrum, the volume and controlling the radio; QSOs have been made this way. Not everything ThetisLink can do with
+Thetis can be done with hpsdr-rs yet. hpsdr-rs (tested with 0.12 and 0.13) reports a single transmit profile
+(`Default`), so there is nothing to choose: the sound of your transmit signal (EQ, compressor) is set in hpsdr-rs
+itself. It does not answer the volume of RX2. When you release the PTT you hear a loud remnant of audio for a fraction
+of a second, and the S-meter kicks briefly. That still needs to improve, but it does not get in the way of a QSO.
+
+What differs from Windows:
+
+- Rebooting and shutting down the PC remotely are refused, with a line in the log.
+- Serial ports are listed under their lasting name from `/dev/serial/by-id`, so they stay the same after a reboot.
+- Finding and starting Thetis happens on Windows only.
+
 ## Step 3: Installing the ThetisLink Desktop Client (Windows)
 
 > The ThetisLink Desktop Client is currently only available for Windows. A macOS build (Intel) has been experimentally tested but is not included in the distribution.
@@ -347,14 +370,14 @@ When the server itself runs on the Thetis PC, its window has two tabs: **Status*
 > information in Settings.
 
 **Via file manager:**
-1. Copy `ThetisLink-2.13.2.apk` to your phone (USB, email, or cloud)
+1. Copy `ThetisLink-2.14.0.apk` to your phone (USB, email, or cloud)
 2. Open the APK file on the phone
 3. Allow "Install from unknown sources" if prompted
 4. Install
 
 **Via ADB** (with USB debugging enabled):
 ```
-adb install ThetisLink-2.13.2.apk
+adb install ThetisLink-2.14.0.apk
 ```
 
 ### 4.2 Connecting: guided setup wizard

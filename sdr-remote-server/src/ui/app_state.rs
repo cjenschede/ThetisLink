@@ -15,7 +15,8 @@ use super::*;
 impl ServerApp {
     pub fn new(config: ServerConfig, log_buffer: LogBuffer) -> Self {
         super::window_placement::log_monitor_layout();
-        let serial_ports = crate::amplitec::available_ports();
+        let serial_ports = crate::serial_ports::names();
+        crate::serial_ports::log_ports(&serial_ports);
 
         let has_spe = config.spe_port.is_some();
         let has_rf2k = config.rf2k_addr.is_some();

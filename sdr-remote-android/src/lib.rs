@@ -11,7 +11,7 @@ pub use logging::{developer_code_matches, init_logging, log_line, log_tail, set_
 pub use bridge::{
     ble_drop_policy, expected_route_label, filter_step, filter_width_label, ptt_button, relay_is_configured, s_meter_fraction, s_meter_text, version, yaesu_s_meter_dbm,
     tx_gain_db, tx_gain_db_max, tx_gain_db_min, tx_gain_factor, tx_gain_from_fraction, tx_gain_off_db, yaesu_mic_gain_db, yaesu_mic_gain_from_db,
-    BleDropPolicy, BlePttAction, BridgeFilterEdges,
+    BleDropPolicy, BlePttAction, BridgeFilterEdges, BridgeTuneButton,
     BlePttGate, PhonePtt, PttButton, PttSource, PttTarget, BridgeChatAnswer, BridgeChatMessage, BridgeChatState, BridgeDxSpot, BridgeRadioState, BridgeRogerBeep,
     SdrBridge,
 };

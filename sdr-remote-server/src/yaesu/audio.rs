@@ -118,6 +118,21 @@ fn choose_output(names: &[String], pat_name: &str, pos: usize) -> Option<OutputC
     nth("usb audio codec").map(|index| OutputChoice { index, step: OutputMatch::Codec })
 }
 
+/// An empty device list in the platform's own words, and its usual cause: one
+/// source for the startup listing (`log_input_devices`) and every lookup that
+/// finds nothing (`device_not_found`).
+#[cfg(windows)]
+pub(super) const NO_DEVICES: &str = "Windows hands out an empty list";
+#[cfg(windows)]
+pub(super) const NO_DEVICES_CAUSE: &str = "The usual cause is a Remote Desktop session: while one is connected it \
+    takes the machine's sound cards out of the session. Disconnect it, or set its audio to play on the remote \
+    computer, and then restart the server: the device list is only read at startup";
+#[cfg(not(windows))]
+pub(super) const NO_DEVICES: &str = "the sound system hands out an empty list";
+#[cfg(not(windows))]
+pub(super) const NO_DEVICES_CAUSE: &str = "Check that the sound cards are connected and that this user may use \
+    them (`aplay -l` lists them), and then restart the server: the device list is only read at startup";
+
 /// Why a device could not be found - said so that the reader can act on it.
 ///
 /// An empty list and a name that does not match are two different faults with
@@ -129,9 +144,7 @@ fn choose_output(names: &[String], pat_name: &str, pos: usize) -> Option<OutputC
 /// there is one ordinary cause and the operator cannot guess it.
 pub(super) fn device_not_found(kind: &str, wanted: &str, pos: usize, available: &[String]) -> String {
     if available.is_empty() {
-        format!(
-            "no {kind} devices AT ALL: Windows hands out an empty list, so '{wanted}' was never              looked for. The usual cause is a Remote Desktop session: while one is connected it              takes the machine's sound cards out of the session. Disconnect it, or set its audio              to play on the remote computer, and then restart the server: the device list is              only read at startup"
-        )
+        format!("no {kind} devices AT ALL: {NO_DEVICES}, so '{wanted}' was never looked for. {NO_DEVICES_CAUSE}")
     } else {
         format!(
             "no {kind} device matching '{wanted}' (#{pos}) among the {n} present: {available:?}",
@@ -182,8 +195,10 @@ pub(super) fn build_capture_stream(
     info!("{} audio: {}Hz, {} channels, {:?}", prefix, sample_rate, channels, config.sample_format());
     let prefix_err = prefix.to_string();
 
-    let stream = device.build_input_stream(
-        &config.into(),
+    // In the device's own sample format (16-bit on a USB codec under ALSA); f32 here.
+    let stream = sdr_remote_core::audio_stream::build_input_stream_f32(
+        &device,
+        &config,
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
             // Latency trade-off (since v2.0.0):
             // Per-callback Vec allocation is deliberately accepted on this server-side
@@ -220,8 +235,7 @@ pub(super) fn build_capture_stream(
                 .unwrap_or(0);
             last_audio_time.store(now_ms, std::sync::atomic::Ordering::Relaxed);
         },
-        move |err| { log::warn!("{} audio capture error: {}", prefix_err, err); },
-        None,
+        move |err| { log::warn!("{} audio capture error: {} (further errors of this stream are not logged)", prefix_err, err); },
     ).map_err(|e| format!("build input stream: {}", e))?;
 
     stream.play().map_err(|e| format!("start capture: {}", e))?;
@@ -284,14 +298,13 @@ pub(super) fn build_output_stream(
     use ringbuf::traits::Split;
     let (producer, mut consumer) = ringbuf::HeapRb::<f32>::new(sample_rate as usize * 2).split();
 
-    // Install the new producer so the bridge thread can write to it
-    *producer_handle.lock().unwrap() = Some(producer);
-
     // A zero the ring could not give, in the middle of an over, is counted
     // (build 263; until then it was silence nobody saw).
     let mut watch = super::tx_timing::GapWatch::default();
-    let stream = device.build_output_stream(
-        &config.into(),
+    // In the device's own sample format, as the capture above.
+    let stream = sdr_remote_core::audio_stream::build_output_stream_f32(
+        &device,
+        &config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
             use ringbuf::traits::{Consumer as _, Observer as _};
             let (keyed, over) = (gaps.keyed(), gaps.over());
@@ -305,14 +318,113 @@ pub(super) fn build_output_stream(
             // What is left, for the lead's rebuild in the radio's task (build 278).
             gaps.set_ring_ms(super::tx_timing::queued_ms(consumer.occupied_len(), consumer.capacity().get()));
         },
-        move |err| { log::warn!("{} audio output error: {}", prefix_err, err); },
-        None,
+        move |err| { log::warn!("{} audio output error: {} (further errors of this stream are not logged)", prefix_err, err); },
     ).map_err(|e| format!("build output stream: {}", e))?;
 
     stream.play().map_err(|e| format!("start playback: {}", e))?;
+    // Only now the bridge thread writes to the new ring: published before the
+    // stream stood, a build or start that failed left the stream that is still
+    // open reading a ring nobody wrote to any more - silent transmit audio.
+    *producer_handle.lock().unwrap() = Some(producer);
     info!("{} audio output started", prefix);
 
     Ok((stream, sample_rate))
+}
+
+/// The rate a radio's sound card opened at, one per direction. The holder of
+/// the open stream sets it (`StreamHolder::opened`); what converts to or from
+/// the card reads it and rebuilds when it changes (`RateFollower`). A radio
+/// switched on after the server started opens at the card's own rate (44100 Hz
+/// on a USB codec under ALSA), and the loops converted on at the 48000 they
+/// started with: one tick in twelve empty, a steady hiccup.
+#[derive(Clone, Debug)]
+pub struct OpenRate(Arc<std::sync::atomic::AtomicU32>);
+
+impl OpenRate {
+    /// Until a stream opens: the rate the loops start at.
+    pub fn new(hz: u32) -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicU32::new(hz)))
+    }
+
+    pub fn get(&self) -> u32 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn set(&self, hz: u32) {
+        self.0.store(hz, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// What a converter remembers of the rate it was built for. A rate counts as
+/// followed only once the converter for it stands (`built`): a rebuild that
+/// failed is tried again on the next block, and logged once (`failed`).
+#[derive(Debug)]
+pub struct RateFollower {
+    built_for: u32,
+    failed_for: u32,
+}
+
+impl RateFollower {
+    pub fn new(hz: u32) -> Self {
+        Self { built_for: hz, failed_for: 0 }
+    }
+
+    /// The rate the card opened at, while the converter is built for another;
+    /// the converter is then rebuilt for it.
+    pub fn changed(&self, open: u32) -> Option<u32> {
+        if open == self.built_for || open == 0 {
+            return None;
+        }
+        Some(open)
+    }
+
+    /// The converter for `hz` stands.
+    pub fn built(&mut self, hz: u32) {
+        self.built_for = hz;
+        self.failed_for = 0;
+    }
+
+    /// A rebuild for `hz` failed; true the first time for this rate, so the
+    /// line is logged once while the rebuild is tried on every block.
+    pub fn failed(&mut self, hz: u32) -> bool {
+        let first = self.failed_for != hz;
+        self.failed_for = hz;
+        first
+    }
+}
+
+/// Thread-safe holder for a cpal::Stream that can be swapped on reconnect,
+/// with the rate it opened at: a stream goes in only with its rate, so no
+/// opener can leave the rate behind (five of them threw it away,
+/// `Ok((stream, _rate))`, and the two at the start kept it in a local that
+/// nothing updated afterwards).
+pub(super) struct StreamHolder {
+    stream: Mutex<Option<cpal::Stream>>,
+    rate: OpenRate,
+}
+// SAFETY: cpal::Stream on Windows (WASAPI) uses COM handles safe to move between threads.
+unsafe impl Send for StreamHolder {}
+unsafe impl Sync for StreamHolder {}
+
+impl StreamHolder {
+    pub(super) fn new(rate: OpenRate) -> Self {
+        Self { stream: Mutex::new(None), rate }
+    }
+    /// A stream that plays, and the rate it plays at. A rebuild that failed
+    /// never gets here, so the stream that stays keeps its rate.
+    pub(super) fn opened(&self, stream: cpal::Stream, hz: u32) {
+        *self.stream.lock().unwrap() = Some(stream);
+        self.rate.set(hz);
+    }
+    pub(super) fn close(&self) {
+        *self.stream.lock().unwrap() = None;
+    }
+    pub(super) fn is_set(&self) -> bool {
+        self.stream.lock().unwrap().is_some()
+    }
+    pub(super) fn rate(&self) -> OpenRate {
+        self.rate.clone()
+    }
 }
 
 /// Legacy structs kept for API compatibility (unused internally now)
@@ -447,14 +559,18 @@ mod output_choice_tests {
 
 #[cfg(test)]
 mod device_message_tests {
-    use super::device_not_found;
+    use super::{device_not_found, OpenRate, RateFollower, StreamHolder, NO_DEVICES, NO_DEVICES_CAUSE};
 
     /// The evening this was written for: nothing to choose from.
     #[test]
     fn an_empty_list_says_so_and_names_the_cause() {
         let msg = device_not_found("output", "Luidsprekers (USB Audio CODEC )", 1, &[]);
         assert!(msg.contains("AT ALL"), "{msg}");
+        assert!(msg.contains(NO_DEVICES) && msg.contains(NO_DEVICES_CAUSE), "{msg}");
+        #[cfg(windows)]
         assert!(msg.contains("Remote Desktop"), "{msg}");
+        #[cfg(not(windows))]
+        assert!(!msg.contains("Windows") && !msg.contains("Remote Desktop"), "{msg}");
         assert!(msg.contains("restart the server"), "{msg}");
     }
 
@@ -470,5 +586,144 @@ mod device_message_tests {
         assert!(!msg.contains("AT ALL"), "{msg}");
         assert!(msg.contains("2 present"), "{msg}");
         assert!(msg.contains("2- USB Audio CODEC"), "{msg}");
+    }
+
+    /// The transmit ring goes to the bridge only once the new stream plays: a
+    /// reopen that fails keeps the stream that is open, writing into its ring.
+    #[test]
+    fn the_transmit_ring_is_published_after_the_stream_plays() {
+        let src = sdr_remote_core::source_text::production_code(include_str!("audio.rs"));
+        let body = &src[src.find("pub(super) fn build_output_stream(").unwrap()..];
+        let played = body.find("stream.play().map_err(").unwrap();
+        let published = body.find("*producer_handle.lock().unwrap() = Some(producer);").unwrap();
+        assert!(played < published, "published after the stream plays");
+        assert_eq!(src.matches("*producer_handle.lock().unwrap() = Some(producer);").count(), 1);
+    }
+
+    /// A converter follows the rate the card opened at: until the converter
+    /// for it stands, the second change too, and nothing for the same rate or
+    /// for no rate. A rebuild that failed is asked for again, logged once.
+    #[test]
+    fn a_converter_follows_the_rate_the_card_opened_at() {
+        let rate = OpenRate::new(48_000);
+        let mut follow = RateFollower::new(rate.get());
+        assert_eq!(follow.changed(rate.get()), None, "built for it");
+        for pass in 0..2 {
+            rate.set(44_100);
+            assert_eq!(follow.changed(rate.get()), Some(44_100), "pass {pass}: the radio switched on later");
+            assert!(follow.failed(44_100), "pass {pass}: a failed rebuild is logged");
+            assert_eq!(follow.changed(rate.get()), Some(44_100), "pass {pass}: and asked for again");
+            assert!(!follow.failed(44_100), "pass {pass}: logged once");
+            follow.built(44_100);
+            assert_eq!(follow.changed(rate.get()), None, "pass {pass}: built, so once");
+            rate.set(48_000);
+            assert_eq!(follow.changed(rate.get()), Some(48_000), "pass {pass}: and back");
+            follow.built(48_000);
+            assert_eq!(follow.changed(rate.get()), None, "pass {pass}: built again");
+        }
+        assert_eq!(follow.changed(0), None, "no rate is no change");
+        // The holder keeps the rate of the stream it holds: a rebuild that
+        // failed leaves both as they were.
+        let holder = StreamHolder::new(OpenRate::new(48_000));
+        let shared = holder.rate();
+        holder.rate.set(44_100);
+        assert_eq!(shared.get(), 44_100, "every reader sees the holder's rate");
+        holder.close();
+        assert!(!holder.is_set());
+        assert_eq!(shared.get(), 44_100, "closing does not invent a rate");
+    }
+
+    /// Every opener hands its stream and its rate to the holder in one call,
+    /// and every converter of a radio's audio follows the rate.
+    #[test]
+    fn every_opener_and_every_converter_uses_the_open_rate() {
+        let code = |s: &str| sdr_remote_core::source_text::production_code(s).to_string();
+        let (m, poll) = (code(include_str!("mod.rs")), code(include_str!("poll.rs")));
+        let audio = code(include_str!("audio.rs"));
+        let opened = "Ok((stream, rate)) => capture_stream.opened(stream, rate)";
+        assert_eq!(m.matches(opened).count(), 1);
+        assert_eq!(m.matches("Ok((stream, rate)) => output_stream.opened(stream, rate)").count(), 1);
+        assert_eq!(poll.matches("capture_stream.opened(stream, rate);").count(), 2, "reconnect and watchdog");
+        assert_eq!(poll.matches("output_stream.opened(stream, rate);").count(), 3, "reconnect, watchdog, recovery");
+        let builders = [&m, &poll].iter().map(|t| t.matches("build_capture_stream(").count() + t.matches("build_output_stream(").count()).sum::<usize>();
+        assert_eq!(builders, 7, "each opener above, and no other");
+        for t in [&m, &poll] {
+            assert!(!t.contains("_rate)) =>"), "a rate thrown away");
+        }
+        assert_eq!(audio.matches("self.rate.set(hz);").count(), 1, "only an open stream sets it");
+        // Both builders hand on the rate the card itself opened at.
+        assert_eq!(audio.matches("let sample_rate = config.sample_rate().0;").count(), 2, "both builders take the card's rate");
+        assert_eq!(audio.matches("Ok((stream, sample_rate))").count(), 2, "and hand that rate on");
+        // Which rate goes where: the capture holder's to the receive loop, the
+        // output holder's to the transmit task and the bridge.
+        assert_eq!(m.matches("capture_rate: capture_stream.rate(),").count(), 1);
+        assert_eq!(m.matches("output_rate: output_stream.rate(),").count(), 1);
+        assert_eq!(m.matches("let output_rate = output_stream.rate();").count(), 1);
+        // Code only, whitespace folded: a comment line in between changes nothing.
+        let squash = |t: &str| t.lines().map(str::trim).filter(|l| !l.starts_with("//")).collect::<Vec<_>>().join(" ")
+            .split_whitespace().collect::<Vec<_>>().join(" ");
+        // The bridge reads it per block, and its hold limit from that read.
+        let bridge = &m[m.find("while let Some(samples) = rx.recv().await {").unwrap()..];
+        let bridge = squash(&bridge[..bridge.find("let taken = hold.take(").unwrap()]);
+        assert_eq!(bridge, "while let Some(samples) = rx.recv().await { let tx_rate = output_rate.get(); \
+            let hold_max = (tx_rate as u64 * tx_timing::HOLD_MAX_MS / 1000) as usize;", "per block, before it is used");
+        // The receive loop: the start and a rebuild both build everything that
+        // hangs on the rate in one value, and a rebuild comes before the block
+        // goes in and counts only once it stands.
+        let rx = code(include_str!("../audio_loops.rs"));
+        let at_rate = &rx[rx.find("impl RxAtRate {").unwrap()..];
+        let at_rate = squash(&at_rate[..at_rate.find("fn line(").unwrap()]);
+        assert!(at_rate.contains("let frame = (hz * 20 / 1000) as usize; Ok(Self { hz, buf: RadioBuffer::new(frame), \
+            nb: resampler(hz, NETWORK_SAMPLE_RATE, frame, UpFilter::Long)"), "{at_rate}");
+        assert!(at_rate.contains("wb: resampler(hz, NETWORK_SAMPLE_RATE_WIDEBAND, frame, UpFilter::Long)"), "{at_rate}");
+        assert_eq!(rx.matches("RxAtRate::new(").count(), 2, "the start and the rebuild");
+        assert_eq!(rx.matches("let mut rx = RxAtRate::new(sample_rate)?;").count(), 1);
+        // Both arms, to their end: the line from the builder, and a failed
+        // rebuild that does not count as followed and is logged once.
+        assert!(squash(&rx).contains("if let Some(hz) = follow.changed(capture_rate.get()) { match RxAtRate::new(hz) { \
+            Ok(built) => { rx = built; follow.built(hz); \
+            info!(\"Yaesu slot {} RX resamplers: {}; the sound card opened at {} Hz\", slot, rx.line(), hz); } \
+            Err(e) => { if follow.failed(hz) { \
+            log::error!(\"Yaesu slot {} RX resamplers for {} Hz: {:#}; the old ones stay, tried again on every block\", slot, hz, e); } } } }"),
+            "the receive rebuild, whole");
+        assert_eq!(rx.matches("info!(\"Yaesu slot {} RX resamplers: {}\", slot, rx.line());").count(), 1, "the start line, from the builder");
+        assert!(rx.find("if let Some(hz) = follow.changed(capture_rate.get()) {").unwrap()
+            < rx.find("rx.buf.push(&samples);").unwrap(), "rebuilt before the block goes in");
+        assert_eq!(rx.matches("rx.buf.push(&samples);").count(), 1);
+        // The transmit task: the same for its one resampler.
+        let tx = code(include_str!("../tx_recover.rs"));
+        assert!(squash(&tx).contains("fn to_card(hz: u32) -> anyhow::Result<Resampler> { \
+            resampler(NETWORK_SAMPLE_RATE_WIDEBAND, hz, FRAME_SAMPLES_WIDEBAND, UpFilter::Long) }"));
+        assert_eq!(tx.matches("to_card(").count(), 3, "defined, the start and the rebuild");
+        assert_eq!(tx.matches("let mut to_radio = match to_card(tx_rate.get()) {").count(), 1);
+        assert!(squash(&tx).contains("if let Some(hz) = follow.changed(tx_rate.get()) { match to_card(hz) { \
+            Ok(r) => { to_radio = r; follow.built(hz); \
+            info!(\"{} TX resampler: the sound card plays at {} Hz now; {}\", label, hz, to_radio.built()); } \
+            Err(e) => { if follow.failed(hz) { \
+            log::error!(\"{} TX resampler for {} Hz: {:#}; the old one stays, tried again on every tick\", label, hz, e); } } } }"),
+            "the transmit rebuild, whole");
+        assert!(squash(&tx).contains("\"{} TX task started (wideband Opus, jitter buffer as Thetis); {}\", label, to_radio.built() );"),
+            "the start line, from the resampler");
+        let net = code(include_str!("../network.rs"));
+        assert_eq!(net.matches("Some((rx, y.capture_rate.clone(), y.status_arc()))").count(), 2, "both radios");
+        assert_eq!(net.matches("map(|y| y.output_rate.clone());").count(), 2, "both radios");
+        // Each radio's transmit task on its own card: the two blocks are a
+        // mirror, and one letter decides which card a task follows.
+        let net = squash(&net);
+        for radio in ["yaesu", "yaesu2"] {
+            let block = format!("let tx_audio_tx = {radio}.as_ref().and_then(|y| y.tx_audio_tx.clone()); \
+                let tx_rate = {radio}.as_ref().map(|y| y.output_rate.clone()); \
+                let timing = {radio}.as_ref().map(|y| y.status_arc().lock().unwrap().tx_timing.clone());");
+            assert_eq!(net.matches(&block).count(), 1, "{radio}: its own card");
+        }
+        // And each radio's receive loop on its own capture and its own slot.
+        for (radio, slot) in [("yaesu", 0), ("yaesu2", 1)] {
+            let block = format!("let {radio}_audio = {radio}.as_ref().and_then(|y| {{ \
+                let rx = y.audio_rx.lock().ok().and_then(|mut a| a.take())?; \
+                Some((rx, y.capture_rate.clone(), y.status_arc())) }});");
+            assert_eq!(net.matches(&block).count(), 1, "{radio}: its own capture");
+            let call = format!("start, audio_stats, server_start, {slot}, {radio}_status)");
+            assert_eq!(net.matches(&call).count(), 1, "{radio}: its own slot");
+        }
     }
 }

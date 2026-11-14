@@ -1744,7 +1744,7 @@ fn render_port_trouble(ui: &mut egui::Ui, index: usize, radio: Option<&crate::ya
     }
 }
 
-/// "Yaesu N: transmits when Windows raises RTS or DTR ...": the menus that key
+/// "Yaesu N: transmits when the PC raises RTS or DTR ...": the menus that key
 /// the radio on a line of its USB port.
 fn render_line_keyed(ui: &mut egui::Ui, index: usize, radio: Option<&crate::yaesu::YaesuRadio>) {
     let Some(y) = radio else { return };

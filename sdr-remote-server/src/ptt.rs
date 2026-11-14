@@ -11,6 +11,7 @@ use log::{error, info, warn};
 use crate::tci::TciConnection;
 
 /// Launch an application using Windows ShellExecuteW (works from elevated processes)
+#[cfg(windows)]
 fn shell_execute_open(path: &str) -> bool {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
@@ -50,6 +51,19 @@ fn shell_execute_open(path: &str) -> bool {
     (result as usize) > 32
 }
 
+/// How this platform launches Thetis, for the line that says it failed.
+#[cfg(windows)]
+const LAUNCH_HOW: &str = "via ShellExecute";
+#[cfg(not(windows))]
+const LAUNCH_HOW: &str = "(launching Thetis is Windows-only)";
+
+/// Thetis is a Windows program: elsewhere there is nothing to launch, and the
+/// caller logs that the launch failed.
+#[cfg(not(windows))]
+fn shell_execute_open(_path: &str) -> bool {
+    false
+}
+
 /// Check if a process is running using Windows API (no console window)
 fn is_process_running(name: &str) -> bool {
     !process_ids(name).is_empty()
@@ -65,7 +79,15 @@ pub fn thetis_process_ids() -> Vec<u32> {
     ids
 }
 
+/// Outside Windows no Thetis runs on this PC: the radio is reached over TCI
+/// (Thetis on another PC, or another TCI program), as with an empty list on Windows.
+#[cfg(not(windows))]
+fn process_ids(_name: &str) -> Vec<u32> {
+    Vec::new()
+}
+
 /// The ids of every process with this executable name (no console window).
+#[cfg(windows)]
 fn process_ids(name: &str) -> Vec<u32> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
@@ -234,6 +256,154 @@ impl SafetyClocks {
     }
 }
 
+/// The client whose TUNE press switched Thetis's TUNE on, for as long as
+/// Thetis tunes (2.13.3 build 1). Field test 2026-11-08: a TUNE from the
+/// client kept its carrier for some 80 s after the link went, and a new
+/// client did not end it either. The clocks above look at the PTT state only,
+/// and TUNE never sets it. Only a client's press is watched here: the tuner
+/// and RF2K sequences of the server end their own carrier.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct TuneOwner {
+    by: Option<std::net::SocketAddr>,
+}
+
+impl TuneOwner {
+    /// A client's TUNE press: "on" names that client, "off" forgets whoever
+    /// it was.
+    fn pressed(&mut self, addr: std::net::SocketAddr, on: bool) {
+        self.by = on.then_some(addr);
+    }
+
+    /// The client to watch now. Nobody when Thetis is not tuning (its own
+    /// button, a time-out, a SWR trip, the tuner ending it), and forgotten
+    /// then, so a later TUNE from the console is not switched off for a
+    /// client that left meanwhile.
+    fn watch(&mut self, tuning: bool) -> Option<std::net::SocketAddr> {
+        if !tuning {
+            self.by = None;
+        }
+        self.by
+    }
+
+    /// Whether the TUNE of `addr` goes off: it is still the client that
+    /// switched it on, and it is gone (`None`) or silent past the heartbeat
+    /// window of the PTT safety, with the same `>`.
+    fn left_by(&self, addr: std::net::SocketAddr, silence: Option<Duration>) -> bool {
+        self.by == Some(addr)
+            && silence.map_or(true, |d| d > Duration::from_millis(HEARTBEAT_TIMEOUT_MS))
+    }
+}
+
+#[cfg(test)]
+mod tune_owner_tests {
+    use super::{TuneOwner, HEARTBEAT_TIMEOUT_MS};
+    use std::time::Duration;
+
+    fn a() -> std::net::SocketAddr {
+        "192.0.2.10:4580".parse().unwrap()
+    }
+    fn b() -> std::net::SocketAddr {
+        "192.0.2.11:4580".parse().unwrap()
+    }
+    const WINDOW: Duration = Duration::from_millis(HEARTBEAT_TIMEOUT_MS);
+
+    /// The field case of 2026-11-08: TUNE on from a client, then the client
+    /// goes silent. Off past the window, not on it; off at once when the
+    /// client is gone.
+    #[test]
+    fn a_tune_goes_off_when_the_client_that_switched_it_on_goes() {
+        let mut o = TuneOwner::default();
+        o.pressed(a(), true);
+        assert_eq!(o.watch(true), Some(a()));
+        assert!(!o.left_by(a(), Some(Duration::ZERO)), "a client that is there keeps its TUNE");
+        assert!(!o.left_by(a(), Some(WINDOW)), "on the window is not past it (the same > as the PTT)");
+        assert!(o.left_by(a(), Some(WINDOW + Duration::from_millis(1))), "past the window");
+        assert!(o.left_by(a(), None), "a client that is gone");
+    }
+
+    /// Only the client that switched it on. A press "off" from anyone
+    /// forgets the owner, and a new "on" moves it.
+    #[test]
+    fn only_the_client_that_switched_tune_on_takes_it_off_by_leaving() {
+        let mut o = TuneOwner::default();
+        o.pressed(a(), true);
+        assert!(!o.left_by(b(), None), "another client leaving ends nothing");
+        o.pressed(b(), true);
+        assert!(!o.left_by(a(), None), "the owner moved to the last press");
+        assert!(o.left_by(b(), None));
+        o.pressed(a(), false);
+        assert_eq!(o.watch(true), None, "a press off forgets whoever it was");
+        assert!(!o.left_by(b(), None));
+    }
+
+    /// Thetis stopped tuning by itself (its button, a time-out, a SWR trip):
+    /// the owner is forgotten, also when Thetis tunes again later from the
+    /// console. The second pass: on, off by Thetis, on again from the
+    /// console, and the client that left does not end it.
+    #[test]
+    fn a_tune_thetis_ended_forgets_its_owner_for_the_next_one() {
+        let mut o = TuneOwner::default();
+        o.pressed(a(), true);
+        assert_eq!(o.watch(false), None, "Thetis is not tuning");
+        assert_eq!(o.watch(true), None, "a TUNE from the console has no client owner");
+        assert!(!o.left_by(a(), None));
+        // And once more from the client, without anything in between.
+        o.pressed(a(), true);
+        assert_eq!(o.watch(true), Some(a()));
+        assert!(o.left_by(a(), None));
+    }
+
+    /// Through the controller, twice without a restart: the press sets TUNE
+    /// and its owner, the release takes both away, and the next press is
+    /// watched again (the second pass of the field case).
+    #[tokio::test]
+    async fn the_controller_switches_off_the_tune_of_a_client_that_went_twice() {
+        let mut p = super::PttController::new_tci(None, None);
+        // Connected, so the TUNE counts as on the air: without a link it would
+        // not. The link comes with its channel, as in the server.
+        let _wire = p.tci.set_link_for_test(true, 1);
+        assert_eq!(p.tune_owner_to_watch(), None);
+        for pass in 1..=2 {
+            p.client_tune(a(), true).await;
+            assert!(p.thetis_tune_on(), "pass {pass}: the press switched TUNE on");
+            assert_eq!(p.tune_owner_to_watch(), Some(a()), "pass {pass}");
+            assert!(!p.release_tune_left_by(a(), Some(WINDOW)).await, "pass {pass}: inside the window");
+            assert!(p.thetis_tune_on());
+            assert!(p.release_tune_left_by(a(), None).await, "pass {pass}: gone");
+            assert!(!p.thetis_tune_on(), "pass {pass}: TUNE off");
+            assert_eq!(p.tune_owner_to_watch(), None, "pass {pass}: and its owner forgotten");
+            assert!(!p.release_tune_left_by(a(), None).await, "pass {pass}: once");
+        }
+        // A press off from the client itself: nothing left to watch.
+        p.client_tune(a(), true).await;
+        p.client_tune(a(), false).await;
+        assert!(!p.thetis_tune_on());
+        assert_eq!(p.tune_owner_to_watch(), None);
+    }
+
+    /// The wiring, as text: the safety task and the control arm run no test.
+    /// The press names its client; the tick asks the owner, then the session,
+    /// then releases, after the clocks of Thetis and the radios; and the state
+    /// goes to the clients in the broadcast list.
+    #[test]
+    fn the_tune_safety_is_wired_into_the_safety_tick_and_the_press() {
+        let network = include_str!("network.rs");
+        let network = &sdr_remote_core::source_text::production_code(network);
+        assert_eq!(network.matches("ptt.client_tune(addr, on).await;").count(), 1, "the press");
+        assert_eq!(network.matches("ptt.set_tune(").count(), 0, "no press past the owner");
+        let tick = network.find("let_a_silent_holder_go(&session, target, radio.as_deref(), flag).await;").unwrap();
+        let watch = network.find("let tune_by = ptt.lock().await.tune_owner_to_watch();").expect("in the tick");
+        let silence = network.find("let silence = session.lock().await.silence_of(addr, Instant::now());").unwrap();
+        let release = network.find("ptt.lock().await.release_tune_left_by(addr, silence).await;").unwrap();
+        assert!(tick < watch && watch < silence && silence < release, "in this order, after the radios");
+        assert!(release - tick < 1200, "in the same tick");
+        assert_eq!(network.matches("tune_owner_to_watch()").count(), 1);
+        assert_eq!(network.matches("release_tune_left_by(").count(), 1);
+        assert_eq!(network.matches("(ControlId::ThetisTune, thetis_tune as u16),").count(), 1, "the state to the clients");
+        assert_eq!(network.matches("let thetis_tune = ptt_guard.thetis_tune_on();").count(), 1);
+    }
+}
+
 /// Did the client's silence end what the transmit buffer holds (build 248)?
 /// Past the packet window of the safety, with the same comparison: where the
 /// safety lets the transmitter go, the audio waiting in the buffer from before
@@ -263,11 +433,11 @@ pub enum PttState {
     Tx,
 }
 
-/// What the `tx_blocked` gate means, for the three places that log it. Two
+/// What the `tx_blocked` gate means, for the places that log it. Two
 /// things shut it: an RX-only Amplitec position, and the server's safety task
 /// stopping (`network.rs` `safety_task_lost`) - the log used to name only the
 /// first.
-const TX_BLOCKED_WHY: &str =
+pub(crate) const TX_BLOCKED_WHY: &str =
     "transmitting is blocked (an RX-only Amplitec position, or the safety task stopped)";
 
 /// PTT controller with safety layers.
@@ -304,9 +474,17 @@ pub struct PttController {
     /// marked as RX-only in `config.amplitec_tx_blocked`; in that case all
     /// server-initiated TX paths refuse to send a TX command
     /// to Thetis. Written by the equipment tick in `network.rs`, every 200 ms,
-    /// with or without a client (build 218), and set for good by
-    /// `safety_task_lost` when that task has died.
+    /// with or without a client (build 218), and kept shut for good once
+    /// `blocked_for_good` is set.
     tx_blocked: Arc<AtomicBool>,
+    /// Set by `safety_task_lost` (`block_for_good`): the equipment tick ORs it
+    /// into `tx_blocked`, so the position of an antenna never opens a gate the
+    /// safety closed.
+    blocked_for_good: Arc<AtomicBool>,
+    /// The Amplitec-A position is RX-only (or a switch to one waits), written by
+    /// the equipment tick; shared with the TCI connection, which answers a TX
+    /// keyed at the radio PC only on such a position.
+    rx_only_position: Arc<AtomicBool>,
     /// The active RX-only position is one Thetis cannot guard by itself
     /// (`RxOnlyGuard::unguarded`). Written by the RX-only loop in `network.rs`,
     /// read by the heartbeat and the server window: one place decides, the
@@ -322,6 +500,8 @@ pub struct PttController {
     ptt_tail_latencies: Vec<u64>,
     /// When TRX last went off, waiting for the first RX audio that is not silence.
     rx_back: RxBackWatch,
+    /// Who switched the running TUNE on from a client (2.13.3 build 1).
+    tune_owner: TuneOwner,
 }
 
 /// The time from "TRX off" to the first block of RX audio from Thetis that is not
@@ -346,6 +526,15 @@ const RX_BACK_PEAK: f32 = 1e-4;
 /// while no client is there, and a client returning minutes later would otherwise
 /// report minutes as a turnaround.
 const RX_BACK_GIVE_UP_MS: u64 = 10_000;
+
+/// Samples waiting at `rate_hz`, in ms; no rate gives 0. Until build 36 this
+/// divided by a fixed 48, and a Yaesu card at 44.1 kHz read 8 % short.
+fn backlog_ms(samples: usize, rate_hz: u32) -> u64 {
+    if rate_hz == 0 {
+        return 0;
+    }
+    samples as u64 * 1000 / rate_hz as u64
+}
 
 pub(crate) fn turnaround_clock() -> u64 {
     static BASE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -375,15 +564,16 @@ impl RxBackWatch {
     }
 
     /// One block of RX1 audio as it leaves Thetis; `backlog_samples` is what
-    /// still waits behind it in the accumulator. Logs once per turnaround.
-    pub fn rx_block(&self, block: &[f32], backlog_samples: usize) {
-        let _ = self.rx_block_at(turnaround_clock(), block, backlog_samples);
+    /// still waits behind it in the accumulator, at `rate_hz` (Thetis' 48 kHz,
+    /// or the rate a Yaesu's card opened at). Logs once per turnaround.
+    pub fn rx_block(&self, block: &[f32], backlog_samples: usize, rate_hz: u32) {
+        let _ = self.rx_block_at(turnaround_clock(), block, backlog_samples, rate_hz);
     }
 
     /// `rx_block` at a given time on `turnaround_clock()` - the clock as an
     /// argument, so a test can stand a wait in the past. Returns the turnaround
     /// it reported, so a test can tell "reported" from "cancelled".
-    pub(crate) fn rx_block_at(&self, now_ms: u64, block: &[f32], backlog_samples: usize) -> Option<u64> {
+    pub(crate) fn rx_block_at(&self, now_ms: u64, block: &[f32], backlog_samples: usize, rate_hz: u32) -> Option<u64> {
         let off_at = self.off_at.load(Ordering::Relaxed);
         if off_at == 0 {
             return None;
@@ -401,7 +591,7 @@ impl RxBackWatch {
             return None;
         }
         let ms = now_ms.saturating_sub(off_at);
-        dev_info!("{}PTT metrics: RX audio back {} ms after TRX off (peak {:.4}, backlog {} ms)", self.prefix, ms, peak, backlog_samples / 48);
+        dev_info!("{}PTT metrics: RX audio back {} ms after TRX off (peak {:.4}, backlog {} ms)", self.prefix, ms, peak, backlog_ms(backlog_samples, rate_hz));
         Some(ms)
     }
 }
@@ -429,6 +619,8 @@ impl PttController {
             thetis_shutdown_time: None,
             thetis_relaunch_when_gone: false,
             tx_blocked: Arc::new(AtomicBool::new(false)),
+            blocked_for_good: Arc::new(AtomicBool::new(false)),
+            rx_only_position: Arc::new(AtomicBool::new(false)),
             rx_only_unguarded: Arc::new(AtomicBool::new(false)),
             last_blocked_log: None,
             ptt_prefill_start: None,
@@ -436,6 +628,7 @@ impl PttController {
             ptt_prefill_latencies: Vec::new(),
             ptt_tail_latencies: Vec::new(),
             rx_back: RxBackWatch::default(),
+            tune_owner: TuneOwner::default(),
         };
         // Share the same tx_blocked Arc with the TCI connection, so that the
         // tci-notification handler can also block Thetis-direct PTT.
@@ -444,6 +637,8 @@ impl PttController {
         // - too late for RX-amp protection.)
         let blocked_clone = ctl.tx_blocked.clone();
         ctl.tci.set_tx_blocked_handle(blocked_clone);
+        let position_clone = ctl.rx_only_position.clone();
+        ctl.tci.set_rx_only_position_handle(position_clone);
         ctl
     }
 
@@ -453,6 +648,22 @@ impl PttController {
     /// read it on the hot path.
     pub fn tx_blocked_handle(&self) -> Arc<AtomicBool> {
         self.tx_blocked.clone()
+    }
+
+    /// Shut the TX gate until the server is restarted (`safety_task_lost`).
+    pub fn block_for_good(&self) {
+        self.blocked_for_good.store(true, Ordering::Relaxed);
+        self.tx_blocked.store(true, Ordering::Relaxed);
+    }
+
+    /// Handle to the "the position is RX-only" flag, for the equipment tick.
+    pub fn rx_only_position_handle(&self) -> Arc<AtomicBool> {
+        self.rx_only_position.clone()
+    }
+
+    /// Handle to `blocked_for_good`, for the equipment tick.
+    pub fn blocked_for_good_handle(&self) -> Arc<AtomicBool> {
+        self.blocked_for_good.clone()
     }
 
     /// Is the current Amplitec position marked receive-only?
@@ -729,7 +940,7 @@ impl PttController {
                 if shell_execute_open(&path) {
                     info!("Thetis.exe launch initiated");
                 } else {
-                    error!("Failed to start Thetis via ShellExecute");
+                    error!("Failed to start Thetis {}", LAUNCH_HOW);
                     self.pending_power_on = false;
                     self.thetis_launch_time = None;
                 }
@@ -885,6 +1096,7 @@ impl PttController {
             mode: self.vfo_a_mode(),
             ours: self.is_transmitting(),
             thetis: self.tci.thetis_on_the_air(),
+            tune_unseen: !self.tci.is_connected() && self.tci.tune_is_ours(),
         }
     }
 
@@ -1169,7 +1381,7 @@ impl PttController {
                 if shell_execute_open(path) {
                     info!("Thetis.exe launch initiated");
                 } else {
-                    error!("Failed to start Thetis via ShellExecute");
+                    error!("Failed to start Thetis {}", LAUNCH_HOW);
                     return;
                 }
             }
@@ -1558,8 +1770,8 @@ impl PttController {
         self.tci.vfo_swap().await
     }
 
-    pub async fn set_rx2_af_gain(&mut self, level: u8) {
-        self.tci.set_rx2_af_gain(level).await
+    pub async fn set_rx_af_gain(&mut self, receiver: u32, level: u8, who: String) {
+        self.tci.set_rx_af_gain(receiver, level, who).await
     }
 
     pub async fn set_rx2_nr(&mut self, level: u8) {
@@ -1673,6 +1885,46 @@ impl PttController {
     pub async fn set_tune(&mut self, on: bool) {
         if let Some(t) = Some(&mut self.tci) { t.set_tune(on).await; }
     }
+    /// A client's TUNE press (`ControlId::ThetisTune`): remembered, so the
+    /// safety tick can switch it off when that client goes (2.13.3 build 1).
+    pub async fn client_tune(&mut self, addr: std::net::SocketAddr, on: bool) {
+        self.tune_owner.pressed(addr, on);
+        self.set_tune(on).await;
+    }
+    /// Thetis is tuning: its report, or our own TUNE on (one flag for both
+    /// receivers). What the clients are told, and what the safety watches.
+    pub fn thetis_tune_on(&self) -> bool {
+        self.tci.thetis_trx_and_tune().1
+    }
+    /// The client whose press switched the running TUNE on, if any.
+    pub fn tune_owner_to_watch(&mut self) -> Option<std::net::SocketAddr> {
+        let tuning = self.thetis_tune_on();
+        self.tune_owner.watch(tuning)
+    }
+    /// The safety for a TUNE from a client: `silence` is how long `addr` has
+    /// been silent, `None` when it is no client any more. TUNE goes off when
+    /// that client is still the one that switched it on and is gone or past
+    /// the heartbeat window. Whether it went off.
+    pub async fn release_tune_left_by(
+        &mut self,
+        addr: std::net::SocketAddr,
+        silence: Option<Duration>,
+    ) -> bool {
+        if !self.tune_owner.left_by(addr, silence) {
+            return false;
+        }
+        match silence {
+            Some(_) => error!(
+                "SAFETY: {} switched TUNE on and has been silent for {} (window {HEARTBEAT_TIMEOUT_MS}ms): TUNE off",
+                addr,
+                describe_silence(silence)
+            ),
+            None => error!("SAFETY: {} switched TUNE on and is gone: TUNE off", addr),
+        }
+        self.tune_owner = TuneOwner::default();
+        self.set_tune(false).await;
+        true
+    }
     pub async fn set_tune_drive(&mut self, level: u8) {
         if let Some(t) = Some(&mut self.tci) { t.set_tune_drive(level).await; }
     }
@@ -1767,6 +2019,35 @@ impl PttController {
 mod tests {
     use super::*;
 
+    /// What the safety shuts stays shut: `block_for_good` closes the gate and
+    /// marks it, so the equipment tick (which ORs the mark in) cannot open it.
+    #[test]
+    fn the_safety_shuts_the_gate_for_good() {
+        let p = PttController::new_tci(None, None);
+        assert!(!p.tx_blocked() && !p.blocked_for_good_handle().load(Ordering::Relaxed));
+        p.block_for_good();
+        assert!(p.tx_blocked() && p.blocked_for_good_handle().load(Ordering::Relaxed));
+        let net = include_str!("network.rs");
+        let net = &sdr_remote_core::source_text::production_code(net);
+        let lost = &net[net.find("async fn safety_task_lost(").unwrap()..];
+        let lost = &lost[..lost.find("\n    }\n").unwrap()];
+        assert!(lost.contains("self.ptt.lock().await.block_for_good();"), "the loss shuts it for good");
+    }
+
+    /// On the air is our own PTT or Thetis on the air, either one: a TUNE
+    /// from a client is no `PttState::Tx`, yet it is a carrier.
+    #[test]
+    fn on_the_air_is_ours_or_thetis() {
+        for ours in [false, true] {
+            for thetis in [false, true] {
+                for tune_unseen in [false, true] {
+                    let now = TxNow { mode: 0, ours, thetis, tune_unseen };
+                    assert_eq!(now.on_the_air(), ours || thetis || tune_unseen, "ours {ours}, thetis {thetis}, unseen {tune_unseen}");
+                }
+            }
+        }
+    }
+
     /// The turnaround watch waits only after TRX off, ignores the silence Thetis
     /// sends during TX, fires once on the first block with sound, and a TX in
     /// between cancels the wait (2026-10-04).
@@ -1777,30 +2058,37 @@ mod tests {
         let mut sound = vec![0.0f32; 960];
         sound[10] = 0.01;
         let t = 1_000;
-        assert_eq!(w.rx_block_at(t, &sound, 0), None, "not waiting: nothing to report");
+        assert_eq!(w.rx_block_at(t, &sound, 0, 48_000), None, "not waiting: nothing to report");
         w.off_at.store(t, Ordering::Relaxed); // TRX off at t
-        assert_eq!(w.rx_block_at(t + 100, &quiet, 0), None, "silence does not end the wait");
-        assert_eq!(w.rx_block_at(t + 180, &sound, 960), Some(180), "the first sound reports");
-        assert_eq!(w.rx_block_at(t + 200, &sound, 0), None, "and only once");
+        assert_eq!(w.rx_block_at(t + 100, &quiet, 0, 48_000), None, "silence does not end the wait");
+        assert_eq!(w.rx_block_at(t + 180, &sound, 960, 48_000), Some(180), "the first sound reports");
+        assert_eq!(w.rx_block_at(t + 200, &sound, 0, 48_000), None, "and only once");
+        // The backlog in ms at the rate it is counted in: Thetis' 48 kHz and a
+        // Yaesu card at 44.1 kHz give the same 100 ms for 100 ms of samples.
+        assert_eq!(super::backlog_ms(4_800, 48_000), 100);
+        assert_eq!(super::backlog_ms(4_410, 44_100), 100);
+        assert_eq!(super::backlog_ms(4_410, 0), 0, "nothing open");
+        let src = sdr_remote_core::source_text::production_code(include_str!("ptt.rs"));
+        assert_eq!(src.matches("peak, backlog_ms(backlog_samples, rate_hz));").count(), 1, "the line reads it so");
         // Second pass without a restart: off, then TX again before
         // any sound - cancelled, never reported.
         w.trx_off();
         assert_ne!(w.off_at.load(Ordering::Relaxed), 0, "trx_off arms the wait");
         w.off_at.store(t, Ordering::Relaxed); // on the made-up clock from here
         w.trx_on();
-        assert_eq!(w.rx_block_at(t + 300, &sound, 0), None, "a TX in between cancels the wait");
+        assert_eq!(w.rx_block_at(t + 300, &sound, 0, 48_000), None, "a TX in between cancels the wait");
         // The RX loop found no client: the same.
         w.off_at.store(t, Ordering::Relaxed);
         w.cancel();
-        assert_eq!(w.rx_block_at(t + 50, &sound, 0), None, "no client: cancelled");
+        assert_eq!(w.rx_block_at(t + 50, &sound, 0, 48_000), None, "no client: cancelled");
         // A third turnaround still reports.
         w.off_at.store(t, Ordering::Relaxed);
-        assert_eq!(w.rx_block_at(t + 160, &sound, 0), Some(160));
+        assert_eq!(w.rx_block_at(t + 160, &sound, 0, 48_000), Some(160));
         // A wait older than the give-up is dropped, not reported.
         w.off_at.store(5, Ordering::Relaxed);
-        assert_eq!(w.rx_block_at(5 + RX_BACK_GIVE_UP_MS, &quiet, 0), None);
+        assert_eq!(w.rx_block_at(5 + RX_BACK_GIVE_UP_MS, &quiet, 0, 48_000), None);
         assert_eq!(w.off_at.load(Ordering::Relaxed), 5, "at the limit it still waits");
-        assert_eq!(w.rx_block_at(5 + RX_BACK_GIVE_UP_MS + 1, &sound, 0), None, "a stale wait goes, unreported");
+        assert_eq!(w.rx_block_at(5 + RX_BACK_GIVE_UP_MS + 1, &sound, 0, 48_000), None, "a stale wait goes, unreported");
         assert_eq!(w.off_at.load(Ordering::Relaxed), 0);
     }
 
@@ -1818,7 +2106,7 @@ mod tests {
         let lp = &lp[..lp.find("\npub async fn ").unwrap_or(lp.len())];
         let has_line = |s: &str, l: &str| s.lines().filter(|x| x.trim() == l).count();
         // Build 151: the buffers moved into ThetisBuffers, and the two lines with them.
-        assert_eq!(has_line(lp, "rx_back.rx_block(&rx1_frame, step.rx1_left);"), 1);
+        assert_eq!(has_line(lp, "rx_back.rx_block(&rx1_frame, step.rx1_left, tci_rate);"), 1);
         let no_clients = &lp[lp.find("if step.no_listener {").unwrap()..];
         let no_clients = &no_clients[..no_clients.find("continue;").unwrap()];
         assert_eq!(has_line(no_clients, "rx_back.cancel();"), 1, "no client: the wait goes");
@@ -2294,6 +2582,22 @@ pub struct TxNow {
     pub ours: bool,
     /// Thetis reports TX or TUNE, whoever keyed it.
     pub thetis: bool,
+    /// Our own TUNE while the TCI link is down: nobody can tell us it ended.
+    /// Plain Thetis keeps tuning when the link drops, and the snapshot at the
+    /// next connect only says so then. Counted in `on_the_air()`, so for the
+    /// switch decision and the spectrum calibration's pause (a carrier is
+    /// there); the stop of a TX on an RX-only position reads `thetis`.
+    pub tune_unseen: bool,
+}
+
+impl TxNow {
+    /// Something is on the air, for the switch decision and the calibration's
+    /// pause: our own PTT, Thetis
+    /// transmitting or tuning (MOX or TUNE at the radio-pc, or a TUNE from a
+    /// client), or our TUNE while TCI is down.
+    pub fn on_the_air(&self) -> bool {
+        self.ours || self.thetis || self.tune_unseen
+    }
 }
 
 /// The TCI link as the RX-only loop reads it (build 226).
@@ -2488,14 +2792,35 @@ mod rx_only_unguarded_tests {
         use super::{PttController, PttState, TciLinkNow, TxNow};
         let mut p = PttController::new_tci(None, None);
         p.tci.vfo_a_mode = 7;
-        assert_eq!(p.tx_now(), TxNow { mode: 7, ours: false, thetis: false });
+        assert_eq!(p.tx_now(), TxNow { mode: 7, ours: false, thetis: false, tune_unseen: false });
         p.state = PttState::Tx;
-        assert_eq!(p.tx_now(), TxNow { mode: 7, ours: true, thetis: false }, "ours is our PTT");
+        assert_eq!(p.tx_now(), TxNow { mode: 7, ours: true, thetis: false, tune_unseen: false }, "ours is our PTT");
         p.state = PttState::Rx;
         p.tci.set_on_the_air_for_test(true, false);
-        assert_eq!(p.tx_now(), TxNow { mode: 7, ours: false, thetis: true }, "a TX Thetis makes");
+        assert_eq!(p.tx_now(), TxNow { mode: 7, ours: false, thetis: true, tune_unseen: false }, "a TX Thetis makes");
         p.tci.set_on_the_air_for_test(false, true);
-        assert_eq!(p.tx_now(), TxNow { mode: 7, ours: false, thetis: true }, "Thetis' own TUNE counts");
+        assert_eq!(p.tx_now(), TxNow { mode: 7, ours: false, thetis: true, tune_unseen: false }, "Thetis' own TUNE counts");
+        p.tci.set_on_the_air_for_test(false, false);
+        // The connection reads the controller's own gate and position
+        // (`new_tci`): without them `send` refuses nothing.
+        let (gate, position) = p.tci.gate_handles_for_test();
+        assert!(std::sync::Arc::ptr_eq(&gate, &p.tx_blocked), "the gate");
+        assert!(std::sync::Arc::ptr_eq(&position, &p.rx_only_position), "the position");
+        // The break: our TUNE, then the TCI link drops. Plain Thetis
+        // keeps tuning and nobody can say so; the switch decision counts it
+        // until the link is back and Thetis reports for itself.
+        for pass in 0..2 {
+            p.tci.set_link_for_test(true, 1);
+            p.tci.tune_sent_for_test("tune:0,true;");
+            assert!(!p.tx_now().tune_unseen, "pass {pass}: with the link, Thetis reports it");
+            p.tci.disconnect_for_test();
+            let now = p.tx_now();
+            assert!(now.tune_unseen && now.on_the_air(), "pass {pass}: link down, our TUNE counts");
+            assert!(!now.thetis, "pass {pass}: and only for the decision, not as Thetis on the air");
+            p.tci.tune_sent_for_test("tune:0,false;");
+            assert!(!p.tx_now().on_the_air(), "pass {pass}: our own off, also while the link is down");
+        }
+        p.tci.set_link_for_test(false, 0);
 
         assert_eq!(p.tci_link_now(), TciLinkNow { up: false, answers_run_cat_ex: false, connections: 0 });
         p.tci.set_link_for_test(true, 3);
@@ -2506,7 +2831,8 @@ mod rx_only_unguarded_tests {
 
         let net = include_str!("network.rs");
         for line in [
-            "let crate::ptt::TxNow { mode: mode_u8, ours: tx_active, thetis: thetis_tx } = ptt.lock().await.tx_now();",
+            "let tx_now = ptt.lock().await.tx_now();
+                                let crate::ptt::TxNow { mode: mode_u8, ours: tx_active, thetis: thetis_tx, .. } = tx_now;",
             "let crate::ptt::TciLinkNow { up: tci_up_now, answers_run_cat_ex, connections: tci_conn_now } =",
         ] {
             assert_eq!(net.matches(line).count(), 1, "{line}");

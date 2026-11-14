@@ -1098,7 +1098,6 @@ impl ClientEngine {
         let mut tx_gain: f32 = 0.5;
         let mut play_volume: f32 = 1.0; // WAV-playback ('Play') level (client-only)
         let mut last_sent_volume: u16 = 0;
-        let mut rx_volume_synced: bool = false; // Don't send ZZLA until server value received
         let mut agc = TxAgc::new();
         let mut yaesu_agc = TxAgc::new(); // separate AGC envelope for the Yaesu TX branch (part B)
         let mut yaesu_tx_agc_enabled = false; // own Yaesu AGC toggle (separate from Thetis agc_enabled)
@@ -1784,7 +1783,6 @@ impl ClientEngine {
                         last_hb_ack_rtt = 0;
                         logged_first_rx = false;
                         logged_first_tx = false;
-                        rx_volume_synced = false;
                         rx2_volume_synced = false;
                         state.rx_af_gain = 0;
                         state.connect_status = crate::state::ConnectStatus::Disconnected;
@@ -3338,7 +3336,6 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                 yaesu2_logged_first = false;
                 vrx1_logged_first = false;
                 vrx2_logged_first = false;
-                rx_volume_synced = false;
                 rx2_volume_synced = false;
                 state.rx_af_gain = 0;
                 // The link is gone, so nothing is outstanding any more. Three of
@@ -4089,7 +4086,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                     state.rx_af_gain = val;
                                     rx_volume = val as f32 / 100.0;
                                     last_sent_volume = val as u16;
-                                    rx_volume_synced = true;
+                                    state.rx_volume_synced = true;
                                 }
                                 ControlId::FilterLow => {
                                     state.filter_low_hz = ctrl.value as i16 as i32;
@@ -4169,6 +4166,11 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 ControlId::Rx2ManualNotchFilter => state.rx2_nf_enable = ctrl.value != 0,
                                 ControlId::RxBalance => state.rx_balance = ctrl.value as i16 as i8,
                                 ControlId::TuneDrive => state.tune_drive = ctrl.value.min(100) as u8,
+                                // Whether Thetis tunes, from the server (2.13.3 build 1).
+                                ControlId::ThetisTune => {
+                                    state.thetis_tune = ctrl.value != 0;
+                                    state.thetis_tune_known = true;
+                                }
                                 ControlId::MonitorVolume => state.mon_volume = ctrl.value as i16 as i8,
                                 ControlId::ThetisSwr => state.thetis_swr_x100 = ctrl.value,
                                 ControlId::VfoSync => state.vfo_sync = ctrl.value != 0,
@@ -4178,7 +4180,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                                 | ControlId::Rx2SpectrumZoom | ControlId::Rx2SpectrumPan
                                 | ControlId::Rx2SpectrumMaxBins | ControlId::Rx2SpectrumFftSize
                                 | ControlId::VfoSwap
-                                | ControlId::ThetisTune | ControlId::YaesuEnable
+                                | ControlId::YaesuEnable
                                 | ControlId::YaesuPtt | ControlId::YaesuFreq
                                 | ControlId::YaesuMicGain | ControlId::YaesuMode
                                 | ControlId::YaesuReadMemories
@@ -5139,7 +5141,6 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             was_connected = false;
                             last_hb_ack_time = None;
                             last_hb_ack_rtt = 0;
-                            rx_volume_synced = false;
                             rx2_volume_synced = false;
                             state.rx_af_gain = 0;
                             // The link is gone, so nothing is outstanding any more. Three of
@@ -6221,7 +6222,6 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                             last_hb_ack_rtt = 0;
                             logged_first_rx = false;
                             logged_first_tx = false;
-                            rx_volume_synced = false;
                             rx2_volume_synced = false;
                             state.rx_af_gain = 0;
                             // The link is gone, so nothing is outstanding any more. Three of
@@ -6391,7 +6391,7 @@ vrx2_enable_at = if on { Some(Instant::now()) } else { None };
                     let af_gain = (rx_volume * 100.0).round() as u16;
 
                     // Send RX1 AF gain control when changed (only after initial sync from server)
-                    if rx_volume_synced && af_gain != last_sent_volume {
+                    if state.rx_volume_synced && af_gain != last_sent_volume {
                         let _ = send_control!(ControlId::Rx1AfGain, af_gain, addr.as_str());
                         last_sent_volume = af_gain;
                     }

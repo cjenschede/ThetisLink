@@ -322,19 +322,13 @@ impl ClientAudio {
             None => None,
             Some(input_device) => Some({
             use cpal::traits::DeviceTrait;
-            let preferred_rate = cpal::SampleRate(48000);
-            let mut best = input_device.default_input_config()
+            let default = input_device.default_input_config()
                 .context("no default input config")?;
-            if best.sample_rate() != preferred_rate {
-                if let Ok(configs) = input_device.supported_input_configs() {
-                    for cfg in configs {
-                        if cfg.min_sample_rate() <= preferred_rate && cfg.max_sample_rate() >= preferred_rate {
-                            best = cfg.with_sample_rate(preferred_rate);
-                            info!("Input: using preferred 48kHz instead of device default");
-                            break;
-                        }
-                    }
-                }
+            let ranges: Vec<cpal::SupportedStreamConfigRange> =
+                input_device.supported_input_configs().map(|c| c.collect()).unwrap_or_default();
+            let best = prefer_48k(default.clone(), &ranges);
+            if best.sample_rate() != default.sample_rate() {
+                info!("Input: using preferred 48kHz instead of device default");
             }
             best
             }),
@@ -351,16 +345,14 @@ impl ClientAudio {
         self.playback_sample_rate = output_config.sample_rate().0;
 
         info!(
-            "Input config: {}ch {}Hz",
-            in_channels, self.capture_sample_rate
+            "Input config: {}ch {}Hz {:?}",
+            in_channels, self.capture_sample_rate, input_config.as_ref().map(|c| c.sample_format())
         );
         info!(
-            "Output config: {}ch {}Hz",
-            out_channels, self.playback_sample_rate
+            "Output config: {}ch {}Hz {:?}",
+            out_channels, self.playback_sample_rate, output_config.sample_format()
         );
 
-        let in_stream_config = input_config.as_ref().map(|c| c.config());
-        let out_stream_config = output_config.config();
 
         // Capture (microphone) - downmix to mono
         let err_flag = self.audio_error.clone();
@@ -374,10 +366,11 @@ impl ClientAudio {
         // Pre-allocated scratch - retains capacity across callback invocations to
         // avoid real-time alloc on the audio thread (latency priority).
         let mut mono_scratch: Vec<f32> = Vec::with_capacity(8192);
-        let capture_stream = match (input_device.as_ref(), in_stream_config.as_ref()) {
-            (Some(input_device), Some(in_stream_config)) => Some(input_device
-            .build_input_stream(
-                in_stream_config,
+        // Each stream in its device's own sample format, f32 here (`audio_stream`).
+        let capture_stream = match (input_device.as_ref(), input_config.as_ref()) {
+            (Some(input_device), Some(input_config)) => Some(sdr_remote_core::audio_stream::build_input_stream_f32(
+                input_device,
+                input_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     // Only write to ring buffer when gate is open (PTT active).
                     // Prevents speaker->mic feedback from contaminating TX audio.
@@ -407,10 +400,9 @@ impl ClientAudio {
                     capture_producer.push_slice(out);
                 },
                 move |err| {
-                    log::error!("client capture error: {}", err);
+                    log::error!("client capture error: {} (further errors of this stream are not logged)", err);
                     err_flag.store(true, Ordering::Relaxed);
                 },
-                None,
             )
             .context("build client capture stream")?),
             _ => None,
@@ -435,9 +427,9 @@ impl ClientAudio {
         // automatically on the first call that needs more; no alloc after that.
         let mut drain_scratch: Vec<f32> = Vec::with_capacity(8192);
         let mut stereo_scratch: Vec<f32> = Vec::with_capacity(8192);
-        let playback_stream = output_device
-            .build_output_stream(
-                &out_stream_config,
+        let playback_stream = sdr_remote_core::audio_stream::build_output_stream_f32(
+                &output_device,
+                &output_config,
                 move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                     // What the device itself predicts between this callback and
                     // the speaker: the half of the sidetone's latency that the
@@ -497,10 +489,9 @@ impl ClientAudio {
                     mix_sidetone(data, out_channels, alarm_rate, &sidetone, &mut sidetone_state);
                 },
                 move |err| {
-                    log::error!("client playback error: {}", err);
+                    log::error!("client playback error: {} (further errors of this stream are not logged)", err);
                     err_flag.store(true, Ordering::Relaxed);
                 },
-                None,
             )
             .context("build client playback stream")?;
 
@@ -653,9 +644,80 @@ impl sdr_remote_logic::audio::AudioBackend for ClientAudio {
     }
 }
 
+/// The microphone at 48 kHz instead of the device's default (avoids 16 kHz
+/// headset resampling issues), in the same sample format and channel count as
+/// the default: only the rate changes. ALSA lists its ranges format by format
+/// from 8 bits up and one channel first, so the first range that covers
+/// 48 kHz was 8-bit mono once the stream opens in the device's own format.
+/// No range like the default covers 48 kHz: the default stands.
+pub(crate) fn prefer_48k(
+    default: cpal::SupportedStreamConfig,
+    ranges: &[cpal::SupportedStreamConfigRange],
+) -> cpal::SupportedStreamConfig {
+    let preferred_rate = cpal::SampleRate(48000);
+    if default.sample_rate() == preferred_rate {
+        return default;
+    }
+    ranges
+        .iter()
+        .find(|r| {
+            r.sample_format() == default.sample_format()
+                && r.channels() == default.channels()
+                && r.min_sample_rate() <= preferred_rate
+                && r.max_sample_rate() >= preferred_rate
+        })
+        .map(|r| r.clone().with_sample_rate(preferred_rate))
+        .unwrap_or(default)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 48 kHz preference changes the rate only: on the range list ALSA
+    /// gives (8 bits and one channel first, f32 near the end) it keeps the
+    /// default's f32 stereo, and with no such range at 48 kHz the default
+    /// stands. A default already at 48 kHz is kept as it is.
+    #[test]
+    fn the_48k_preference_keeps_the_default_format_and_channels() {
+        use cpal::{SampleFormat as F, SampleRate as R, SupportedBufferSize as B, SupportedStreamConfig, SupportedStreamConfigRange};
+        let buf = B::Range { min: 64, max: 8192 };
+        let range = |ch: u16, f: F| SupportedStreamConfigRange::new(ch, R(1), R(384_000), buf.clone(), f);
+        let alsa: Vec<_> = [F::I8, F::U8, F::I16, F::F32]
+            .iter()
+            .flat_map(|&f| [range(1, f), range(2, f)])
+            .collect();
+        let default = SupportedStreamConfig::new(2, R(44_100), buf.clone(), F::F32);
+        let picked = prefer_48k(default.clone(), &alsa);
+        assert_eq!((picked.channels(), picked.sample_rate(), picked.sample_format()), (2, R(48_000), F::F32));
+        // Nothing like the default covers 48 kHz: the default stands.
+        let no_f32: Vec<_> = alsa.iter().filter(|r| r.sample_format() != F::F32).cloned().collect();
+        let kept = prefer_48k(default.clone(), &no_f32);
+        assert_eq!((kept.channels(), kept.sample_rate(), kept.sample_format()), (2, R(44_100), F::F32));
+        let at_48k = SupportedStreamConfig::new(1, R(48_000), buf.clone(), F::I16);
+        let same = prefer_48k(at_48k, &alsa);
+        assert_eq!((same.channels(), same.sample_rate(), same.sample_format()), (1, R(48_000), F::I16));
+        // The Windows stand: WASAPI gives a range only at the endpoint's own
+        // rate. Like the default but not covering 48 kHz, below it and above:
+        // the default stands, where `with_sample_rate` would panic ("sample rate
+        // out of range"). Each row pins one of the two bounds.
+        for hz in [16_000, 96_000] {
+            let only = [SupportedStreamConfigRange::new(2, R(hz), R(hz), buf.clone(), F::F32)];
+            let kept = prefer_48k(SupportedStreamConfig::new(2, R(hz), buf.clone(), F::F32), &only);
+            assert_eq!((kept.channels(), kept.sample_rate(), kept.sample_format()), (2, R(hz), F::F32), "{hz} Hz");
+        }
+    }
+
+    /// The microphone is opened with what that rule picks: the call is the
+    /// wiring, and without it the device default (8-bit mono on ALSA) is back.
+    #[test]
+    fn the_microphone_config_comes_from_prefer_48k() {
+        let src = sdr_remote_core::source_text::production_code(include_str!("audio.rs"));
+        assert_eq!(src.matches("let best = prefer_48k(default.clone(), &ranges);").count(), 1);
+        let opened = &src[src.find("let best = prefer_48k(default.clone(), &ranges);").unwrap()..];
+        assert!(opened[..300].contains("best
+"), "and what it picks is the config");
+    }
 
     /// A missing microphone refuses every press of the PTT, for Thetis and both
     /// Yaesu slots, on the path a transmitter held by another station takes

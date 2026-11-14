@@ -1103,54 +1103,46 @@ pub fn decode_iq_payload(payload: &[u8], format: u32, length: u32, _channels: u3
     pairs
 }
 
-/// Build a TCI binary frame (for TX_AUDIO_STREAM)
-pub fn build_tci_binary_frame(
-    receiver: u32,
-    sample_rate: u32,
-    format: u32,
-    length: u32,
-    stream_type: u32,
-    channels: u32,
-    samples: &[f32],
-    output_format: u32,
-) -> Vec<u8> {
-    let data_size = match output_format {
-        SAMPLE_INT16 => length as usize * channels as usize * 2,
-        SAMPLE_FLOAT32 => length as usize * channels as usize * 4,
-        _ => length as usize * channels as usize * 4,
-    };
+/// How many samples a TX_CHRONO request asks for. Its `length` counts the
+/// values in the frame over all channels: stock Thetis asks `samples *
+/// channels` once a client chose its channels, and hpsdr-rs asks 2048 in
+/// stereo and reads 2048 values back.
+pub fn tx_request_samples(length: u32, channels: u32) -> usize {
+    (length / channels.max(1)) as usize
+}
 
-    let mut frame = vec![0u8; TCI_HEADER_SIZE + data_size];
+/// The answer to a TX_CHRONO request: the mono `samples` on every channel the
+/// request named, interleaved, with `length` the number of values as the
+/// request counts them. Until 2.13.3 build 12 a stereo request got the mono
+/// samples one after the other under a stereo header, and a server that reads
+/// the values as pairs kept every other one: the voice an octave up and
+/// unintelligible (hpsdr-rs, 2026-11-09). A mono request is answered byte for
+/// byte as before. Any format but int16 goes out as float32, as before.
+pub fn build_tx_answer(sample_rate: u32, format: u32, channels: u32, samples: &[f32]) -> Vec<u8> {
+    let channels = channels.max(1);
+    let values = samples.len() * channels as usize;
+    let width = if format == SAMPLE_INT16 { 2 } else { 4 };
+    let mut frame = vec![0u8; TCI_HEADER_SIZE + values * width];
 
-    // Header
-    frame[0..4].copy_from_slice(&receiver.to_le_bytes());
+    // Header: receiver 0, codec and crc 0, reserved 0.
     frame[4..8].copy_from_slice(&sample_rate.to_le_bytes());
     frame[8..12].copy_from_slice(&format.to_le_bytes());
-    // codec (12-16) = 0
-    // crc (16-20) = 0
-    frame[20..24].copy_from_slice(&length.to_le_bytes());
-    frame[24..28].copy_from_slice(&stream_type.to_le_bytes());
+    frame[20..24].copy_from_slice(&(values as u32).to_le_bytes());
+    frame[24..28].copy_from_slice(&STREAM_TYPE_TX_AUDIO.to_le_bytes());
     frame[28..32].copy_from_slice(&channels.to_le_bytes());
-    // reserved (32-64) = 0
 
-    // Data
     let data = &mut frame[TCI_HEADER_SIZE..];
-    match output_format {
-        SAMPLE_INT16 => {
-            for (i, &s) in samples.iter().enumerate() {
-                if i * 2 + 2 > data.len() { break; }
+    for (i, &s) in samples.iter().enumerate() {
+        for c in 0..channels as usize {
+            let at = (i * channels as usize + c) * width;
+            if width == 2 {
                 let s16 = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                data[i * 2..i * 2 + 2].copy_from_slice(&s16.to_le_bytes());
-            }
-        }
-        _ => {
-            for (i, &s) in samples.iter().enumerate() {
-                if i * 4 + 4 > data.len() { break; }
-                data[i * 4..i * 4 + 4].copy_from_slice(&s.to_le_bytes());
+                data[at..at + 2].copy_from_slice(&s16.to_le_bytes());
+            } else {
+                data[at..at + 4].copy_from_slice(&s.to_le_bytes());
             }
         }
     }
-
     frame
 }
 
@@ -1199,6 +1191,70 @@ pub fn mode_u8_to_str(mode: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn header(frame: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(frame[at..at + 4].try_into().unwrap())
+    }
+    fn floats(frame: &[u8]) -> Vec<f32> {
+        frame[TCI_HEADER_SIZE..].chunks(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
+    }
+
+    /// A TX_CHRONO request counts values over all channels (2.13.3 build 12).
+    #[test]
+    fn a_tx_request_asks_its_length_over_its_channels_in_samples() {
+        assert_eq!(tx_request_samples(2048, 2), 1024, "hpsdr-rs: 2048 values in stereo");
+        assert_eq!(tx_request_samples(1920, 2), 960, "stock Thetis with two channels");
+        assert_eq!(tx_request_samples(960, 1), 960, "a mono request as before");
+        assert_eq!(tx_request_samples(960, 0), 960, "no channel count is mono");
+    }
+
+    /// A stereo request gets each sample on both channels, and a header that
+    /// counts the values (2.13.3 build 12: the voice an octave up before).
+    #[test]
+    fn a_tx_answer_in_stereo_carries_each_sample_on_both_channels() {
+        let f = build_tx_answer(48_000, SAMPLE_FLOAT32, 2, &[0.25, -0.5, 0.75]);
+        assert_eq!(f.len(), TCI_HEADER_SIZE + 6 * 4);
+        assert_eq!((header(&f, 4), header(&f, 8), header(&f, 20), header(&f, 24), header(&f, 28)),
+            (48_000, SAMPLE_FLOAT32, 6, STREAM_TYPE_TX_AUDIO, 2));
+        assert_eq!(floats(&f), vec![0.25, 0.25, -0.5, -0.5, 0.75, 0.75]);
+        let i16s: Vec<i16> = build_tx_answer(48_000, SAMPLE_INT16, 2, &[0.5, -1.0])[TCI_HEADER_SIZE..]
+            .chunks(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+        assert_eq!(i16s, vec![16383, 16383, -32767, -32767]);
+    }
+
+    /// The reader counts a request in samples and the answer goes out through
+    /// `build_tx_answer`, each in one place (2.13.3 build 12).
+    #[test]
+    fn the_tci_reader_asks_and_answers_through_these_two() {
+        let body = sdr_remote_core::source_text::production_code(include_str!("tci.rs"));
+        assert_eq!(body.matches("let n = tx_request_samples(length, channels);").count(), 1);
+        assert_eq!(body.matches("let waiting = Waiting { n, at: Instant::now(), sample_rate, format, channels };").count(), 1);
+        assert_eq!(body.matches("build_tx_answer(w.sample_rate, w.format, w.channels, &audio)").count(), 1);
+        assert_eq!(body.matches("build_tx_answer(").count(), 1);
+        // A transmission Thetis ended itself gets the line again on the next
+        // one (2.13.3 build 13): the server's TRX-off count does not see it.
+        assert_eq!(body.matches("chrono_said_at = None;").count(), 1);
+        assert!(body.contains("                                tx_ring.drop_waiting();
+                                chrono_said_at = None;
+"));
+    }
+
+    /// A mono request as before build 12, byte for byte: what stock Thetis asks.
+    #[test]
+    fn a_tx_answer_in_mono_is_as_before() {
+        let samples = [0.1f32, 0.2, 0.3];
+        let mut expected = vec![0u8; TCI_HEADER_SIZE];
+        expected[4..8].copy_from_slice(&48_000u32.to_le_bytes());
+        expected[8..12].copy_from_slice(&SAMPLE_FLOAT32.to_le_bytes());
+        expected[20..24].copy_from_slice(&3u32.to_le_bytes());
+        expected[24..28].copy_from_slice(&STREAM_TYPE_TX_AUDIO.to_le_bytes());
+        expected[28..32].copy_from_slice(&1u32.to_le_bytes());
+        for s in samples {
+            expected.extend_from_slice(&s.to_le_bytes());
+        }
+        assert_eq!(build_tx_answer(48_000, SAMPLE_FLOAT32, 1, &samples), expected);
+        assert_eq!(build_tx_answer(48_000, SAMPLE_FLOAT32, 0, &samples), expected, "no channel count is mono");
+    }
 
     /// Who tuned last, per receiver (fork TL2-8, build 218); anything else is
     /// not a report.

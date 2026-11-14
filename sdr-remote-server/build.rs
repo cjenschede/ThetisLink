@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 fn main() {
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+
+    // The RGBA window icon is needed on every platform; the ICO and the
+    // Windows resource only on Windows.
+    generate_rgba(&format!("{}/icon_rgba.bin", out_dir), true);
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() != "windows" {
         return;
     }
 
-    let out_dir = std::env::var("OUT_DIR").unwrap();
     let icon_path = format!("{}/thetislink.ico", out_dir);
-
     generate_ico(&icon_path, true);
-    generate_rgba(&format!("{}/icon_rgba.bin", out_dir), true);
 
     let mut res = winresource::WindowsResource::new();
     res.set_icon(&icon_path);

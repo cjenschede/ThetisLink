@@ -14,6 +14,83 @@ hardware notes, see `Technical-Reference.md` and `User-Manual-EN.md`
 
 ---
 
+## [2.14.0] 2026-11-14 (A TUNE that goes off with its client, the volume on Thetis's own scale, and ThetisLink on Linux)
+
+> **Who this release changes things for.** **Anyone who tunes from the desktop or the
+> phone**: a TUNE you start goes off when your client goes, also when the link drops;
+> the TUNE button on both shows what Thetis does, and a PA that was put in standby for
+> the tune goes back only once the tune really ended. **Anyone who sets the receive
+> volume from a client**: the percent is now Thetis's own setting, so 50 % in the
+> client is 50 in Thetis, a slider no longer jumps back one step after you let go, and
+> every screen follows 0 % too. **Anyone with an Amplitec on a receive-only
+> position**: nothing ThetisLink sends there keys the transmitter. **Anyone with a Yaesu
+> that is switched on after the server**: its sound card is used at the rate it opened
+> at, instead of stuttering. **Anyone who wants to run ThetisLink on Linux**: the server
+> and the desktop client build and run there from source; the server works together
+> with hpsdr-rs. Both are still in development: the basics work.
+>
+> **Works with 2.13.1 and 2.13.2, in both directions.** Nothing changed in what travels
+> between the programs. You can update one program at a time. Coming from 2.12 or
+> older? Then update the server, the desktop client and the Android app together: 2.13
+> does not talk to 2.12 (see 2.13.0).
+>
+> **Thetis.** Unchanged: stock Thetis v2.10.3.15 suffices, and the fork **PA3GHM TL2-18**
+> from 2.13.0 still applies.
+>
+> **Going back to 2.13.2 works.** No new settings are written that an older version
+> would trip over.
+
+### Transmitting and tuning
+- A TUNE started from a client goes off when that client leaves or its link drops, and
+  a TUNE the client could not hand on to Thetis does not count as one.
+- The TUNE button on the desktop and the phone follows one rule and shows what Thetis
+  does. A PA put in standby for the tune goes back only after an end the server
+  confirmed, also when that end came while the link was away.
+- On a receive-only Amplitec position the server refuses every command that would key
+  the transmitter, whichever path sent it. A switch to such a position is refused while
+  anything is on the air; otherwise the server blocks transmitting first and switches
+  once that block stands and nothing is on the air (the request is dropped after three
+  seconds if that does not happen).
+
+### Receive audio and volume
+- The RX volume uses Thetis's own scale in both directions: the percent is Thetis's own
+  setting, so 50 % in the client is 50 in Thetis and a slider no longer jumps back a step
+  after you let go. 0 % is a real value on both screens. The volume of Thetis's sub
+  receiver no longer lands in RX1.
+- A sound card is opened in its own sample format (16-bit cards included).
+- A Yaesu switched on after the server follows the rate its sound card opened at.
+- A sound device that disappears gives one log line instead of thousands.
+
+### Spectrum
+- The calibration against the S-meter learns only from an empty passband, and waits
+  after a signal or a transmission, so a signal no longer pulls the whole spectrum down.
+- The waterfall is drawn again only where it changed (less CPU).
+
+### Phone
+- A slider goes back to the server's value after you let go when the radio or PA
+  holds another value (the drive a PA in Operate holds, a Yaesu value the radio
+  refused). The desktop already did this.
+
+### Linux (build from source, in development)
+- The server and the desktop client build and run on Linux. On Linux the server works
+  together with hpsdr-rs, a TCI server for HPSDR radios by another author. Both are
+  still in development and not finished. The basics work: receiving, transmitting, the
+  spectrum, the volume and controlling the radio; QSOs have been made this way.
+- hpsdr-rs (tested with 0.12 and 0.13) reports a single transmit profile (`Default`), so
+  there is nothing to choose and the sound of the transmit signal is set in hpsdr-rs
+  itself; it does not answer the volume of RX2. Releasing the PTT gives a loud remnant
+  of audio and a short S-meter kick for a fraction of a second: to be improved, not in
+  the way of a QSO.
+- On Linux remote reboot and shutdown are refused, and serial ports are listed under
+  their `/dev/serial/by-id` names. There is no Linux download in this release; the
+  installation guide says what to build with.
+
+### Server log
+- A line with each receiver's volume once it stands still, and a line when receive audio
+  over TCI arrives more than 2 % off the rate its frames announce (a source that stutters).
+
+---
+
 ## [2.13.2] 2026-11-08 (The transmit spectrum of a Yaesu, a tuner that says when it did not tune, and serial devices that come back)
 
 > **Who this release changes things for.** **Anyone who transmits through a Yaesu

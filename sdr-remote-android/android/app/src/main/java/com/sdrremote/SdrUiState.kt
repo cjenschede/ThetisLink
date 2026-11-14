@@ -103,6 +103,7 @@ data class SdrUiState(
     val diversityAutonullResult: Int = 0,
     val driveLevel: Int = 0,
     val rxAfGain: Int = 0,
+    val rxVolumeSynced: Boolean = false,
     val agcEnabled: Boolean = false,
     val otherTx: Boolean = false,
     /** The Thetis meter carries watts now (the engine's `smeter_tx`): the meter's scale, not the PTT (build 169). */
@@ -114,6 +115,11 @@ data class SdrUiState(
     val filterHighHz: Int = 0,
     val thetisConfigured: Boolean = true,
     val thetisStarting: Boolean = false,
+    /// The Thetis TUNE button, from the bridge's machine (2.13.3 build 4):
+    /// what it shows, the PA going to standby first, and whether it can be pressed.
+    val thetisTuneShown: Boolean = false,
+    val thetisTuneWaiting: Boolean = false,
+    val thetisTuneCanPress: Boolean = false,
     /// Server explicitly reports Thetis is not running on the server PC.
     /// Drives the Thetis-autostart option on the Radio screen.
     val thetisNotRunning: Boolean = false,

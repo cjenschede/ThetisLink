@@ -22,6 +22,7 @@ pub mod sidetone;
 pub mod thetis_streams;
 pub mod tx_stream;
 pub mod tx_tap;
+pub mod tune_button;
 pub mod state;
 pub mod station_notice;
 pub mod thetis_autostart;

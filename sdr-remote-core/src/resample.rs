@@ -104,9 +104,19 @@ pub fn filter(from_hz: u32, to_hz: u32, up: UpFilter) -> Option<Filter> {
 pub struct Resampler {
     sinc: Option<SincFixedIn<f32>>,
     filter: Option<Filter>,
+    from_hz: u32,
+    to_hz: u32,
 }
 
 impl Resampler {
+    /// For a log line, from the resampler itself: "44100 Hz to 8000 Hz, down
+    /// with sinc 256, cutoff 0.90". The filter alone is the same at 44.1 and
+    /// 48 kHz, so a line that printed only that could not tell a rebuilt
+    /// resampler from the old one.
+    pub fn built(&self) -> String {
+        format!("{} Hz to {} Hz, {}", self.from_hz, self.to_hz, self)
+    }
+
     /// The filter it was built with; `None` when it passes the samples through.
     pub fn filter(&self) -> Option<Filter> {
         self.filter
@@ -138,7 +148,7 @@ impl fmt::Display for Resampler {
 /// A resampler from `from_hz` to `to_hz`, fed `chunk` samples at a time.
 pub fn resampler(from_hz: u32, to_hz: u32, chunk: usize, up: UpFilter) -> Result<Resampler> {
     let Some(f) = filter(from_hz, to_hz, up) else {
-        return Ok(Resampler { sinc: None, filter: None });
+        return Ok(Resampler { sinc: None, filter: None, from_hz, to_hz });
     };
     let sinc = SincFixedIn::<f32>::new(
         to_hz as f64 / from_hz as f64,
@@ -154,7 +164,7 @@ pub fn resampler(from_hz: u32, to_hz: u32, chunk: usize, up: UpFilter) -> Result
         1,
     )
     .with_context(|| format!("resampler {} Hz to {} Hz", from_hz, to_hz))?;
-    Ok(Resampler { sinc: Some(sinc), filter: Some(f) })
+    Ok(Resampler { sinc: Some(sinc), filter: Some(f), from_hz, to_hz })
 }
 
 #[cfg(test)]
@@ -256,6 +266,18 @@ mod tests {
         assert_eq!(describe(16_000, 48_000, UpFilter::Long), "up with sinc 128, cutoff 0.95");
         // a microphone that records at 8 kHz goes up to 16
         assert_eq!(describe(8_000, 16_000, UpFilter::Long), "up with sinc 128, cutoff 0.95");
+    }
+
+    /// The filter is the same at 44.1 and 48 kHz; what a resampler was built
+    /// for is in its own line, so a rebuild for another rate shows.
+    #[test]
+    fn a_resampler_says_the_rates_it_was_built_for() {
+        let built = |from: u32, to: u32| resampler(from, to, (from / 50) as usize, UpFilter::Long).unwrap().built();
+        assert_eq!(describe(44_100, 8_000, UpFilter::Long), describe(48_000, 8_000, UpFilter::Long));
+        assert_eq!(built(44_100, 8_000), "44100 Hz to 8000 Hz, down with sinc 256, cutoff 0.90");
+        assert_eq!(built(48_000, 8_000), "48000 Hz to 8000 Hz, down with sinc 256, cutoff 0.90");
+        assert_eq!(built(16_000, 44_100), "16000 Hz to 44100 Hz, up with sinc 128, cutoff 0.95");
+        assert_eq!(built(16_000, 16_000), "16000 Hz to 16000 Hz, 1:1, no resampling");
     }
 
     /// Every `.rs` file under the crates that resample audio.

@@ -189,8 +189,11 @@ impl SdrRemoteApp {
                             let _ = self.cmd_tx.send(Command::SetControl(ControlId::SqlEnable, if self.sql_enable { 0 } else { 1 }));
                         }
                         MidiAction::TuneToggle if pressed => {
-                            // Toggle tune - send 1 to activate, server handles state
-                            let _ = self.cmd_tx.send(Command::SetControl(ControlId::ThetisTune, 1));
+                            // The same press as the button (2.13.3 build 3), PA
+                            // standby and restore included. Until build 1 it
+                            // always sent "on"; build 1 made it a toggle that
+                            // skipped the PA.
+                            self.toggle_thetis_tune();
                         }
                         MidiAction::MuteAll if pressed => {
                             self.mute = !self.mute;

@@ -1,20 +1,21 @@
 # ThetisLink
 
-> **Current release: [v2.13.2](https://github.com/cjenschede/ThetisLink/releases/tag/v2.13.2)**:
-> **The transmit spectrum of a Yaesu, a tuner that says when it did not tune, and serial devices
-> that come back.** The desktop client shows the transmit spectrum of a Yaesu in its EQ section:
-> what the encoder really sends, live and as the average of the last over, with the EQ curve over
-> it. A StockCorner tuner on an MCP2221A gets its first tune after power-on right, reports a tune
-> that did not tune as failed (**Tuned below**, 4.5 V by default, 0 = off), and is not pressed
-> while it is off. The UltraBeam and the SPE Expert come back by themselves after a re-plugged
-> USB cable or when they are switched on after the server.
-> **Works with 2.13.1 in both directions**, so you can update one program at a time. Coming from
-> 2.12 or older? Then update the server, the desktop client and the Android app together: 2.13
-> does not talk to 2.12 (see the changelog for 2.13.0). Coming from 2.13.0? Read the 2.13.1 notes
-> on the receive levels first.
+> **Current release: [v2.14.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.14.0)**:
+> **A TUNE that goes off with its client, the volume on Thetis's own scale, and ThetisLink on
+> Linux.** A TUNE you start from a client goes off when that client leaves or loses its link, and
+> the TUNE button on desktop and phone shows what Thetis does. The receive volume is Thetis's own
+> setting: 50 % in the client is 50 in Thetis, a slider no longer jumps back a step, and 0 % is
+> followed on every screen. On a receive-only Amplitec position ThetisLink sends nothing that keys
+> the transmitter. A Yaesu switched on after the server no longer stutters. The server and the
+> desktop client also build from source on Linux, where the server works together with hpsdr-rs;
+> both are still in development and the basics work (no Linux download).
+> **Works with 2.13.1 and 2.13.2 in both directions**, so you can update one program at a time.
+> Coming from 2.12 or older? Then update the server, the desktop client and the Android app
+> together: 2.13 does not talk to 2.12 (see the changelog for 2.13.0). Coming from 2.13.0? Read the
+> 2.13.1 notes on the receive levels first.
 > **Stock Thetis v2.10.3.15 suffices**; the Thetis fork **PA3GHM TL2-18** adds the extras listed
 > in the changelog.
-> Download `ThetisLink-2.13.2.zip` from the
+> Download `ThetisLink-2.14.0.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases). The ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `SHA256SUMS.txt` and the licence files (`LICENSE`, `NOTICE.md`, `ATTRIBUTION.md`, the SBOM, the
@@ -32,8 +33,8 @@ USB audio, one model at a time, and are named individually below.
 
 ## Components
 
-- **ThetisLink Server**: runs on the Thetis PC (Windows), controls the radio via TCI
-- **ThetisLink Client**: desktop client (Windows binary; also builds from source on macOS, experimental) with spectrum, waterfall and full control
+- **ThetisLink Server**: runs on the Thetis PC (Windows), controls the radio via TCI; also builds from source on Linux, where it works together with hpsdr-rs (in development)
+- **ThetisLink Client**: desktop client (Windows binary; also builds from source on macOS, experimental, and on Linux, in development) with spectrum, waterfall and full control
 - **ThetisLink Android**: mobile client app
 
 ## Features

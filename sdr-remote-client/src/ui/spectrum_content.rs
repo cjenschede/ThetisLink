@@ -300,7 +300,7 @@ impl SdrRemoteApp {
             span_hz: self.waterfall.display_span_hz(full_span / (self.spectrum_zoom as f64).max(1.0)),
             row_span_hz: full_span,
         };
-        let mut texture = self.waterfall.texture.take();
+        let mut texture = std::mem::take(&mut self.waterfall.texture);
         let panel = super::spectrum::SpectrumPanel {
             id: "rx1",
             bins: plot_bins,

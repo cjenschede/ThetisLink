@@ -1,12 +1,12 @@
-# ThetisLink v2.13.2: Technical Reference
+# ThetisLink v2.14.0: Technical Reference
 
 ## 1. Overview
 
 ThetisLink is a system for remote operation of a Thetis SDR receiver (whatever radio Thetis drives, reached over TCI and never addressed directly) and of up to two Yaesu transceivers (FT-991A / FTX-1) connected straight to the server, over a network connection. What a radio offers is what Thetis offers for it: RX2 and diversity need a second receiver, and the spectrum width follows the sample rate that radio can deliver. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over one encrypted QUIC connection with Opus codec.
 
-**Version:** v2.13.2 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.14.0 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
-**Target platform:** Windows 10/11 and Android 8+ (arm64); macOS (Intel/Apple Silicon) from source, experimental
+**Target platform:** Windows 10/11 and Android 8+ (arm64); macOS (Intel/Apple Silicon) from source, experimental; Linux (server and desktop client) from source, in development
 **Design priority:** latency > bandwidth > features
 
 ### Thetis compatibility
@@ -26,9 +26,26 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz**, selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.13.2`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.14.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.14.0 highlights
+
+**A TUNE that goes off with its client.** A TUNE a client started goes off when that client leaves or loses its link;
+a TUNE counts as ours only once it was handed to Thetis. The TUNE button on desktop and phone is one state machine
+(`sdr_remote_logic::tune_button`) and shows what Thetis does; a PA put in standby for the tune comes back only after an
+end the server confirmed. On a receive-only Amplitec position the TCI send refuses every command that keys the
+transmitter, whichever path sent it.
+
+**The volume on Thetis's own scale.** The percent is Thetis's setting (a linear gain), sent as `20*log10` of it with a quarter step added, 0 % is
+-60 dB (`volume_to_db`/`volume_from_db` in the server). 0 % is a real value on both screens. The volume of Thetis's sub
+receiver (`rx_volume:<r>,1`) no longer counts as RX1's.
+
+**Sound and spectrum.** A sound card opens in its own sample format (`audio_stream`); a Yaesu switched on after the
+server follows the rate its card opened at. The spectrum's calibration against the S-meter learns from an empty
+passband only. **Linux:** the server and the desktop client build and run on Linux, from source only and in
+development; the server works there together with hpsdr-rs as the TCI source. Nothing changed on the wire; a 2.14.0 program talks to a 2.13.1 or 2.13.2 one.
 
 ### v2.13.2 highlights
 
@@ -3118,4 +3135,4 @@ The chat sits behind the compose profile `chat`: naming the service, as here, st
 
 9. **Relay messages on the phone:** the app does not show the relay status; the desktop shows it on the connect screen, the server as a tooltip in the status panel.
 
-10. **TUNE on an RX-only antenna position:** a TUNE from a client is stopped within 200 ms, not refused beforehand.
+10. **TUNE on an RX-only antenna position:** ThetisLink refuses a TUNE from a client beforehand; it does not reach the radio software. What remains: a TUNE or MOX at the radio PC with radio software that has no receive-only of its own is only stopped afterwards, and a Yaesu is not on the Amplitec.

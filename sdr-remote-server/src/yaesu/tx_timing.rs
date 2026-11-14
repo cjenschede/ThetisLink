@@ -655,10 +655,10 @@ mod tests {
         t.request_at(100, false);
         t.written_at(110, false, 0);
         assert!(!t.keyed());
-        assert!(t.rx_back.rx_block_at(crate::ptt::turnaround_clock(), &loud, 0).is_some(), "TX0 starts the wait");
+        assert!(t.rx_back.rx_block_at(crate::ptt::turnaround_clock(), &loud, 0, 44_100).is_some(), "TX0 starts the wait");
         t.written_at(200, true, 0);
         assert!(t.keyed());
-        assert!(t.rx_back.rx_block_at(crate::ptt::turnaround_clock(), &loud, 0).is_none(), "TX1 ends it");
+        assert!(t.rx_back.rx_block_at(crate::ptt::turnaround_clock(), &loud, 0, 44_100).is_none(), "TX1 ends it");
     }
 
     /// The sound card counts a zero only between audio and audio of one keyed
@@ -1112,7 +1112,7 @@ mod tests {
         // new session forgets an unwritten release.
         assert_eq!(poll.matches("if port.bytes_to_read().map_or(true, |n| n > 0) {").count(), 1);
         assert_eq!(poll.matches("timing_of(status).forget_release();").count(), 1);
-        assert_eq!(loops.matches("rx_back.rx_block(&frame, buf.samples.len());").count(), 1);
+        assert_eq!(loops.matches("rx_back.rx_block(&frame, rx.buf.samples.len(), rx.hz);").count(), 1);
         assert!(
             loops.contains("RadioTick::Idle => {\n                        rx_back.cancel();"),
             "the radio cancels its turnaround wait when nobody listens"

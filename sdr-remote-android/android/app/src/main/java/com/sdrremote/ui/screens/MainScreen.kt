@@ -217,12 +217,16 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
 
     // Sync RX volume slider with Thetis value (server broadcasts ZZLA)
     // Skip in Yaesu mode to prevent Thetis audio from re-activating
+    // What Thetis says the volume is, or null while that is not known or in
+    // Yaesu mode (not followed there, as before): the change below, and the
+    // slider after a release.
+    // Known once the server has said it, 0 % included: a 0 is a volume.
     val serverRxAfGain = state.rxAfGain
-    LaunchedEffect(serverRxAfGain) {
-        if (serverRxAfGain > 0 && !yaesuActive) {
-            val serverVolume = serverRxAfGain / 100f
-            rxVolumeState.floatValue = serverVolume
-            viewModel.setRxVolume(serverVolume)
+    val serverRxVolume: Float? = if (state.rxVolumeSynced && !yaesuActive) serverRxAfGain / 100f else null
+    LaunchedEffect(serverRxAfGain, state.rxVolumeSynced) {
+        if (serverRxVolume != null) {
+            rxVolumeState.floatValue = serverRxVolume
+            viewModel.setRxVolume(serverRxVolume)
         }
     }
 
@@ -1310,6 +1314,10 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     RadioControls(
                         powerOn = state.powerOn,
                         thetisStarting = state.thetisStarting,
+                        thetisTuneShown = state.thetisTuneShown,
+                        thetisTuneWaiting = state.thetisTuneWaiting,
+                        thetisTuneCanPress = state.thetisTuneCanPress,
+                        onThetisTune = { viewModel.thetisTunePress() },
                         thetisNotRunning = state.thetisNotRunning,
                         connected = state.connected,
                         nrLevel = state.nrLevel,
@@ -1326,20 +1334,12 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                         txProfiles = txProfiles,
                         serverTxProfileNames = state.txProfileNames,
                         driveLevel = state.driveLevel,
-                        rf2kOperate = state.rf2kOperate,
-                        rf2kConnected = state.rf2kConnected,
-                        rf2kActive = state.rf2kActive,
-                        speState = state.speState,
-                        speConnected = state.speConnected,
-                        speActive = state.speActive,
                         onControl = onControl,
                         onAgcToggle = {
                             agcEnabled = it
                             viewModel.setAgcEnabled(it)
                             LocalAudioPrefs.setAgcEnabled(prefs, it)
                         },
-                        onRf2kOperate = { viewModel.rf2kOperate(it) },
-                        onSpeOperate = { viewModel.speOperate() },
                     )
                 }
 
@@ -1353,6 +1353,7 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                 item {
                     VolumeControls(
                         rxVolume = rxVolumeState.floatValue,
+                        serverRxVolume = serverRxVolume,
                         txGain = txGainState.floatValue,
                         onRxVolumeChange = onRxVolumeChange,
                         onTxGainChange = onTxGainChange,

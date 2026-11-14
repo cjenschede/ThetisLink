@@ -173,7 +173,7 @@ impl SdrRemoteApp {
     fn close_vrx_popout(&mut self, ch: VrxChannel) {
         if matches!(ch, VrxChannel::Vrx1) {
             self.vrx_popout_init_applied = false;
-            self.vrx1_waterfall_texture = None;
+            self.vrx1_waterfall_texture = super::spectrum::WaterfallImage::default();
             if self.vrx1_high_res_spectrum {
                 self.vrx1_high_res_spectrum = false;
                 let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(0, false, self.vrx1_high_res_last_span_hz));
@@ -181,7 +181,7 @@ impl SdrRemoteApp {
             }
         } else {
             self.vrx2_popout_init_applied = false;
-            self.vrx2_waterfall_texture = None;
+            self.vrx2_waterfall_texture = super::spectrum::WaterfallImage::default();
             if self.vrx2_high_res_spectrum {
                 self.vrx2_high_res_spectrum = false;
                 let _ = self.cmd_tx.send(Command::SetVrxHighResSpectrum(1, false, self.vrx2_high_res_last_span_hz));

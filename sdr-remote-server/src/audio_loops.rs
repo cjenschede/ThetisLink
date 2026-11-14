@@ -139,13 +139,37 @@ pub fn resample_to_network(resampler: &mut Resampler, pcm_f32: &[f32]) -> Vec<f3
     }
 }
 
-/// What the receive resamplers from `from_hz` do, for the start line, read
-/// from the resamplers themselves (build 261).
-fn down_line(from_hz: u32, nb: &Resampler, wb: &Resampler) -> String {
-    format!(
-        "{} Hz to {} Hz {}; to {} Hz {}",
-        from_hz, NETWORK_SAMPLE_RATE, nb, NETWORK_SAMPLE_RATE_WIDEBAND, wb
-    )
+/// What the two receive resamplers do, for the start line, read from the
+/// resamplers themselves (build 261), their rates too.
+fn down_line(nb: &Resampler, wb: &Resampler) -> String {
+    format!("{}; {}", nb.built(), wb.built())
+}
+
+/// Everything the receive side of a Yaesu builds from the rate its sound card
+/// opened at: the buffer of 20 ms frames at that rate and both resamplers to
+/// the network. The start and a rebuild both come through `new`, so a rebuild
+/// cannot leave one of them on the old rate.
+struct RxAtRate {
+    hz: u32,
+    buf: RadioBuffer,
+    nb: Resampler,
+    wb: Resampler,
+}
+
+impl RxAtRate {
+    fn new(hz: u32) -> Result<Self> {
+        let frame = (hz * 20 / 1000) as usize;
+        Ok(Self {
+            hz,
+            buf: RadioBuffer::new(frame),
+            nb: resampler(hz, NETWORK_SAMPLE_RATE, frame, UpFilter::Long).context("create Yaesu NB resampler")?,
+            wb: resampler(hz, NETWORK_SAMPLE_RATE_WIDEBAND, frame, UpFilter::Long).context("create Yaesu WB resampler")?,
+        })
+    }
+
+    fn line(&self) -> String {
+        format!("{}; {} samples a frame", down_line(&self.nb, &self.wb), self.buf.frame)
+    }
 }
 
 /// What a stretch of audio looks like, in the three numbers that separate
@@ -278,9 +302,9 @@ struct FeedStats {
     fill_min: usize,
     fill_max: usize,
     /// How often a side channel (RX2, the binaural right) was brought back to
-    /// one frame - after a tick, or when the loop lines everything up after a
-    /// pause. Apart from `trimmed` (build 150), so that `backlogs dropped`
-    /// means the ceiling everywhere and this has a value of its own.
+    /// what RX1 holds after a tick (until 2.13.3 build 11: to one frame).
+    /// Apart from `trimmed` (build 150), so that `backlogs dropped` means the
+    /// ceiling everywhere and this has a value of its own.
     cut: u32,
 }
 
@@ -326,10 +350,10 @@ impl FeedStats {
     }
 
     /// The text for RX2 and the binaural right: the shared tail, and how often
-    /// the channel was cut to one frame after a tick (build 151: pinned here
-    /// rather than put together at the call).
+    /// the channel was cut back to what RX1 holds after a tick (build 151:
+    /// pinned here rather than put together at the call).
     fn side_summary(&self, frame_samples: usize) -> String {
-        format!("{}; {} cut to one frame", self.summary(frame_samples), self.cut)
+        format!("{}; {} cut back to RX1", self.summary(frame_samples), self.cut)
     }
 
     /// The text after the loop's own name. Unchanged from the RX1 line it was
@@ -368,7 +392,7 @@ struct RxWindow {
     /// nothing per frame, nothing in the path itself.
     feed: FeedStats,
     /// RX2 and the binaural right channel get their own count (build 149): they
-    /// have the same ceiling as RX1 and are cut to one frame after every tick,
+    /// have the same ceiling as RX1 and never keep more than RX1 after a tick,
     /// and until then nothing showed either. Binaural left and right have to
     /// stay one unit; these lines are how to see that they do.
     feed_rx2: FeedStats,
@@ -439,9 +463,10 @@ impl RxWindow {
 /// arithmetic has been found more than once.
 ///
 /// RX1 and the binaural right come from one TCI frame (`decode_audio_payload_stereo`
-/// fills both in one loop), so the two buffers grow by the same amount. They
-/// only part when the right is cut to one frame after a tick, which needs at
-/// least three frames in the buffer.
+/// fills both in one loop), so the two buffers grow by the same amount, and
+/// every drain takes the same from both: they do not part (until 2.13.3 build
+/// 11 the right was cut to one frame after a tick, and parted from three
+/// frames up). Only a frame one side missed makes them differ.
 struct ThetisBuffers {
     rx1: Vec<f32>,
     rx2: Vec<f32>,
@@ -452,8 +477,9 @@ struct ThetisBuffers {
     /// is one that finds this false.
     listening: bool,
     /// Set when a tick found nothing to send; cleared on the first tick that
-    /// has audio again, which is where the backlog is dropped - and, after a
-    /// pause of `PAUSE_TICKS` or more, the wideband chain rebuilt (build 160).
+    /// has audio again. After a pause of `PAUSE_TICKS` or more that tick lines
+    /// the buffers up to one frame and the wideband chain is rebuilt (build
+    /// 160; the line-up after every empty tick until 2.13.3 build 11).
     resume_pending: bool,
     /// Empty ticks in a row, up to the one that has audio again.
     starved_ticks: u32,
@@ -646,17 +672,20 @@ impl ThetisBuffers {
         }
         let paused = std::mem::take(&mut self.starved_ticks);
         if self.resume_pending {
-            // Every empty tick still lines all three up to one frame, so the
-            // binaural right never runs ahead of the left after a late block -
-            // that is how binaural has always worked, and it stays so by design
-            // (2026-10-10). Only a real pause rebuilds the wideband chain and
-            // gets a line (build 160).
+            // Only a real pause is lined up to one frame, rebuilds the wideband
+            // chain and gets a line (build 160 for the chain, 2.13.3 build 11
+            // for the line-up). A short gap is a source that delivers in blocks
+            // longer than a tick - hpsdr-rs sends 2048 samples every 42.7 ms
+            // whatever we ask - and lining up after each one threw away about
+            // a frame per block: 220 of 500 ticks went out empty with the
+            // audio arriving at 100% (2026-11-09). What such a gap leaves
+            // standing, `Backlog` takes away once it was never needed.
             self.resume_pending = false;
             out.resumed = paused >= PAUSE_TICKS;
+        }
+        if out.resumed {
             if self.rx1.len() > f {
-                if out.resumed {
-                    out.carried = Some((paused, self.rx1.len() - f));
-                }
+                out.carried = Some((paused, self.rx1.len() - f));
                 self.rx1.drain(..self.rx1.len() - f);
             }
             // Not counted as a cut (build 151): it brings left and right back
@@ -714,16 +743,20 @@ impl ThetisBuffers {
         if self.rx2.len() >= f {
             out.rx2 = Some(self.rx2.drain(..f).collect());
         }
-        // RX1 keeps what is left after its frame and these do not, so a cut
-        // here moves the binaural right a frame ahead of the left until the
-        // next line-up after a pause (builds 149-151).
-        if self.bin_r.len() > f {
+        // The binaural right comes in with the left, in the same TCI frame,
+        // and RX2 on the same stream (build 152): both keep what RX1 keeps
+        // (2.13.3 build 11), never more, so neither runs ahead. Until then
+        // they were cut to one frame after every tick while RX1 kept its rest,
+        // which put them a frame ahead until the next line-up and, with a
+        // source in blocks, cut audio from them every few ticks (40 cuts of
+        // the right in 10 s with hpsdr-rs).
+        if self.bin_r.len() > self.rx1.len() {
             win.feed_bin_r.cut();
-            self.bin_r.drain(..self.bin_r.len() - f);
+            self.bin_r.drain(..self.bin_r.len() - self.rx1.len());
         }
-        if self.rx2.len() > f {
+        if self.rx2.len() > self.rx1.len() {
             win.feed_rx2.cut();
-            self.rx2.drain(..self.rx2.len() - f);
+            self.rx2.drain(..self.rx2.len() - self.rx1.len());
         }
         out
     }
@@ -859,7 +892,7 @@ pub async fn tci_multichannel_audio_loop(
     let mut res_rx1_wb = mk_resampler_wb().context("RX1 WB resampler")?;
     let mut res_bin_r_wb = mk_resampler_wb().context("BinR WB resampler")?;
     let mut res_rx2_wb = mk_resampler_wb().context("RX2 WB resampler")?;
-    info!("RX resamplers: {}", down_line(tci_rate, &res_rx1, &res_rx1_wb));
+    info!("RX resamplers: {}", down_line(&res_rx1, &res_rx1_wb));
 
     let mut sequence: u32 = 0;
     // RX1, RX2 and the binaural right, and what a tick does to them (build 151).
@@ -1057,7 +1090,7 @@ pub async fn tci_multichannel_audio_loop(
                 }
 
                 // CH0: RX1 (always present)
-                rx_back.rx_block(&rx1_frame, step.rx1_left);
+                rx_back.rx_block(&rx1_frame, step.rx1_left, tci_rate);
                 win.m_in.feed(&rx1_frame);
                 let rx1_8k = resample_to_network(&mut res_rx1, &rx1_frame);
                 win.m_nb.feed(&rx1_8k);
@@ -1262,7 +1295,8 @@ pub async fn yaesu_audio_loop(
     socket: Arc<TrackedSocket>,
     session: Arc<Mutex<SessionManager>>,
     mut audio_rx: tokio::sync::mpsc::Receiver<Vec<f32>>,
-    sample_rate: u32,
+    // The rate the radio's capture opened at; it can open later, at its own.
+    capture_rate: crate::yaesu::OpenRate,
     shutdown: &mut watch::Receiver<bool>,
     start: Instant,
     audio_stats: Arc<crate::audio_stats::AudioActivityStats>,
@@ -1276,7 +1310,8 @@ pub async fn yaesu_audio_loop(
     status: Arc<std::sync::Mutex<crate::yaesu::YaesuState>>,
 ) -> Result<()> {
     let audio_ptype = if slot == 0 { PacketType::AudioYaesu } else { PacketType::AudioYaesu2 };
-    let frame_samples = (sample_rate * 20 / 1000) as usize;
+    let sample_rate = capture_rate.get();
+    let mut follow = crate::yaesu::RateFollower::new(sample_rate);
     // The radio's turnaround watch, as Thetis has one (build 163).
     let rx_back = status.lock().unwrap().tx_timing.rx_back.clone();
 
@@ -1297,15 +1332,11 @@ pub async fn yaesu_audio_loop(
     let mut enc_nb = OpusEncoder::new_rx_continuous()?;
     let mut enc_wb = OpusEncoderWideband::new_rx_continuous()?;
     let mut loss_protect = LossProtection::default();
-    let mut res_nb = resampler(sample_rate, NETWORK_SAMPLE_RATE, frame_samples, UpFilter::Long)
-        .context("create Yaesu NB resampler")?;
-    let mut res_wb = resampler(sample_rate, NETWORK_SAMPLE_RATE_WIDEBAND, frame_samples, UpFilter::Long)
-        .context("create Yaesu WB resampler")?;
-    info!("Yaesu slot {} RX resamplers: {}", slot, down_line(sample_rate, &res_nb, &res_wb));
+    // The buffer and what a tick does to it (build 151), and both resamplers.
+    let mut rx = RxAtRate::new(sample_rate)?;
+    info!("Yaesu slot {} RX resamplers: {}", slot, rx.line());
 
     let mut sequence: u32 = 0;
-    // The buffer and what a tick does to it (build 151).
-    let mut buf = RadioBuffer::new(frame_samples);
     let mut tick = interval(Duration::from_millis(20));
 
     // Software-squelch gate-envelope (FTX-1: closed squelch -> fade to silence;
@@ -1327,7 +1358,25 @@ pub async fn yaesu_audio_loop(
             result = audio_rx.recv() => {
                 match result {
                     Some(samples) => {
-                        buf.push(&samples);
+                        // The card opened at another rate (a radio switched on
+                        // after the server started): the buffer and both
+                        // resamplers are built again for it, and what was
+                        // buffered at the old rate goes.
+                        if let Some(hz) = follow.changed(capture_rate.get()) {
+                            match RxAtRate::new(hz) {
+                                Ok(built) => {
+                                    rx = built;
+                                    follow.built(hz);
+                                    info!("Yaesu slot {} RX resamplers: {}; the sound card opened at {} Hz", slot, rx.line(), hz);
+                                }
+                                Err(e) => {
+                                    if follow.failed(hz) {
+                                        log::error!("Yaesu slot {} RX resamplers for {} Hz: {:#}; the old ones stay, tried again on every block", slot, hz, e);
+                                    }
+                                }
+                            }
+                        }
+                        rx.buf.push(&samples);
                     }
                     None => {
                         info!("Yaesu audio channel closed");
@@ -1369,7 +1418,7 @@ pub async fn yaesu_audio_loop(
                         info!("Radio {} audio: link clean again; error correction off", slot + 1);
                     }
                 }
-                let step = buf.step(&mut feed, !subs.is_empty(), || {
+                let step = rx.buf.step(&mut feed, !subs.is_empty(), || {
                     match (OpusEncoder::new_rx_continuous(), OpusEncoderWideband::new_rx_continuous()) {
                         (Ok(n), Ok(w)) => {
                             enc_nb = n;
@@ -1387,18 +1436,18 @@ pub async fn yaesu_audio_loop(
                 });
                 if feed_since.elapsed() >= Duration::from_secs(10) {
                     if feed.ticks() > 0 {
-                        dev_info!("Radio {} audio feed (10 s): {}", slot + 1, feed.summary(frame_samples));
+                        dev_info!("Radio {} audio feed (10 s): {}", slot + 1, feed.summary(rx.buf.frame));
                     }
                     feed = FeedStats::new();
                     feed_since = Instant::now();
                 }
-                if let Some(n) = buf.settled.take() {
-                    info!("Radio {} audio: dropped {} ms of standing backlog the last {} s never needed", slot + 1, n * 20 / frame_samples, BACKLOG_MEMORY);
+                if let Some(n) = rx.buf.settled.take() {
+                    info!("Radio {} audio: dropped {} ms of standing backlog the last {} s never needed", slot + 1, n * 20 / rx.buf.frame, BACKLOG_MEMORY);
                 }
                 let mut frame = match step {
                     RadioTick::Frame(frame) => {
                         // The radio's "RX audio back" after TX0 (build 163).
-                        rx_back.rx_block(&frame, buf.samples.len());
+                        rx_back.rx_block(&frame, rx.buf.samples.len(), rx.hz);
                         frame
                     }
                     RadioTick::Started => {
@@ -1474,7 +1523,7 @@ pub async fn yaesu_audio_loop(
 
                 // Encode only the requested formats (usually just one).
                 let nb_buf: Option<Vec<u8>> = if need_nb {
-                    let pcm = resample_to_network(&mut res_nb, &frame);
+                    let pcm = resample_to_network(&mut rx.nb, &frame);
                     let i16s: Vec<i16> = pcm.iter()
                         .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16).collect();
                     if i16s.len() >= FRAME_SAMPLES {
@@ -1491,7 +1540,7 @@ pub async fn yaesu_audio_loop(
                 } else { None };
 
                 let wb_buf: Option<Vec<u8>> = if need_wb {
-                    let pcm = resample_to_network(&mut res_wb, &frame);
+                    let pcm = resample_to_network(&mut rx.wb, &frame);
                     let i16s: Vec<i16> = pcm.iter()
                         .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16).collect();
                     if i16s.len() >= FRAME_SAMPLES_WIDEBAND {
@@ -1945,7 +1994,23 @@ pub async fn tci_iq_consumer(
 
 #[cfg(test)]
 mod tests {
-    use super::{FeedStats, LevelStats};
+    use super::{FeedStats, LevelStats, RxAtRate};
+
+    /// The line the field log is read for, from the builder itself: the rates
+    /// both resamplers were built for and the frame at that rate.
+    #[test]
+    fn the_receive_line_names_the_rates_it_was_built_for() {
+        assert_eq!(
+            RxAtRate::new(44_100).unwrap().line(),
+            "44100 Hz to 8000 Hz, down with sinc 256, cutoff 0.90; \
+             44100 Hz to 16000 Hz, down with sinc 128, cutoff 0.90; 882 samples a frame"
+        );
+        assert_eq!(
+            RxAtRate::new(48_000).unwrap().line(),
+            "48000 Hz to 8000 Hz, down with sinc 256, cutoff 0.90; \
+             48000 Hz to 16000 Hz, down with sinc 128, cutoff 0.90; 960 samples a frame"
+        );
+    }
 
     /// Each VRX's AGC follows the mode and AGC-T of the receiver it listens
     /// on: VRX1 RX1's, VRX2 RX2's, handed to every runtime of that channel.
@@ -2080,10 +2145,11 @@ mod tests {").unwrap()];
         }
     }
 
-    /// One late block of Thetis audio is not a pause: it is lined up as
-    /// always (binaural unchanged), but no rebuild and no line. A real pause
-    /// (five empty ticks) rebuilds, and its line says how long it was and what
-    /// went (build 160; until then every empty tick rebuilt, 708 times a day).
+    /// One late block of Thetis audio is not a pause: no rebuild, no line, and
+    /// since 2.13.3 build 11 no line-up either - the second frame stays as the
+    /// reserve, on all three alike. A real pause (five empty ticks) is lined up
+    /// and rebuilds, and its line says how long it was and what went (build
+    /// 160; until then every empty tick rebuilt, 708 times a day).
     #[test]
     fn a_late_tick_is_not_a_pause_but_five_are() {
         let mut b = super::ThetisBuffers::new(F);
@@ -2094,7 +2160,10 @@ mod tests {").unwrap()];
         push_frame(&mut b, true);
         let t = b.step(&mut w, true);
         assert!(!t.resumed && t.carried.is_none(), "one late tick is not a pause");
-        assert_eq!((b.rx1.len(), b.bin_r.len(), b.rx2.len()), (0, 0, 0), "lined up as always");
+        assert_eq!((b.rx1.len(), b.bin_r.len(), b.rx2.len()), (F, F, F), "the second frame kept, on all three");
+        // That reserve goes out on the next tick, which is not empty.
+        thetis_run(&mut b, &mut w, &[0], true, true);
+        assert_eq!(b.rx1.len(), 0);
         thetis_run(&mut b, &mut w, &[0, 0, 0, 0, 0], true, true);
         for _ in 0..4 {
             push_frame(&mut b, true);
@@ -2392,6 +2461,31 @@ mod tests {").unwrap()];
         assert_ne!(w.feed_bin_r.summary(F), w.feed.summary(F));
     }
 
+    /// The mirror: a frame the left missed and the right got. The right is
+    /// brought back to what the left holds, so it does not run a frame ahead
+    /// (2.13.3 build 11), and that shows as one cut on BinR.
+    #[test]
+    fn a_frame_lost_on_the_left_does_not_put_the_right_ahead() {
+        let (mut b, mut w) = (super::ThetisBuffers::new(F), super::RxWindow::new());
+        thetis_run(&mut b, &mut w, &[1, 1, 0, 2], true, true);
+        assert_eq!(b.rx1.len(), F, "a reserve of one frame");
+        let f = next_frame();
+        b.bin_r.extend_from_slice(&f);
+        b.rx2.extend_from_slice(&f);
+        let _ = b.step(&mut w, true);
+        assert_eq!((b.rx1.len(), b.bin_r.len(), b.rx2.len()), (0, 0, 0));
+        assert_eq!((w.feed_bin_r.cuts(), w.feed_rx2.cuts()), (1, 1));
+        // What stays after a cut is the newest audio: the oldest goes, as
+        // everywhere in this loop (build 152 took the newest once).
+        push_frame(&mut b, true);
+        push_frame(&mut b, true);
+        let extra = next_frame();
+        b.bin_r.extend_from_slice(&extra);
+        b.rx2.extend_from_slice(&extra);
+        let _ = b.step(&mut w, true);
+        assert_eq!((b.bin_r.as_slice(), b.rx2.as_slice()), (extra.as_slice(), extra.as_slice()), "the right keeps its newest frame");
+    }
+
     /// The reading rules of build 151, as the loop's own arithmetic: at one
     /// frame per tick everything sits at one frame, and left and right agree.
     #[test]
@@ -2400,61 +2494,110 @@ mod tests {").unwrap()];
         thetis_run(&mut b, &mut w, &[1; 500], true, true);
         let line = "499 ticks, 0 with nothing to send, 0 backlogs dropped; buffer frames avg 1.00 min 1.00 max 1.00";
         assert_eq!(w.feed.summary(F), line);
-        assert_eq!(w.feed_bin_r.side_summary(F), format!("{}; 0 cut to one frame", line));
-        assert_eq!(w.feed_rx2.side_summary(F), format!("{}; 0 cut to one frame", line));
+        assert_eq!(w.feed_bin_r.side_summary(F), format!("{}; 0 cut back to RX1", line));
+        assert_eq!(w.feed_rx2.side_summary(F), format!("{}; 0 cut back to RX1", line));
     }
 
-    /// A burst leaves a backlog at the ceiling, and the binaural right is cut
-    /// once, in the window of the burst. Until build 160 the 9 frames (180 ms)
-    /// then stood for good, with the left 8 frames behind the right. Since 161
-    /// they go a frame a second once the memory has seen them for ten seconds,
-    /// from left and right together, and then read one frame and come out as
-    /// one.
+    /// A burst leaves a backlog at the ceiling, on all three alike. Until build
+    /// 160 the 9 frames (180 ms) then stood for good, and until 2.13.3 build 11
+    /// the right and RX2 were cut to one frame, with the left 8 frames behind.
+    /// Since 161 they go a frame a second once the memory has seen them for ten
+    /// seconds, from all three together, and then read one frame and come out
+    /// as one.
     #[test]
     fn a_burst_is_cut_once_and_its_backlog_goes_after_a_second() {
         let (mut b, mut w) = (super::ThetisBuffers::new(F), super::RxWindow::new());
         thetis_run(&mut b, &mut w, &[1; 100], true, true);
         thetis_run(&mut b, &mut w, &[12], true, true);
-        assert_eq!((w.feed.trimmed, w.feed_bin_r.cuts()), (1, 1), "the burst: one cut at the ceiling, one cut of the right");
-        // The side channels have the same ceiling and are cut the same way
-        // (build 152: RX2 had no test).
+        assert_eq!((w.feed.trimmed, w.feed_bin_r.cuts()), (1, 0), "the burst: one cut at the ceiling, the right keeps what the left keeps");
+        // The side channels have the same ceiling (build 152: RX2 had no test).
         assert_eq!((w.feed_rx2.trimmed, w.feed_bin_r.trimmed), (1, 1));
-        assert_eq!(w.feed_rx2.cuts(), 1);
+        assert_eq!(w.feed_rx2.cuts(), 0);
+        assert_eq!((b.rx1.len(), b.bin_r.len(), b.rx2.len()), (9 * F, 9 * F, 9 * F));
         w = super::RxWindow::new();
         thetis_run(&mut b, &mut w, &[1; 1000], true, true);
         w = super::RxWindow::new();
         thetis_run(&mut b, &mut w, &[1; 500], true, true);
         assert_eq!(w.feed.summary(F), "500 ticks, 0 with nothing to send, 0 backlogs dropped; buffer frames avg 1.00 min 1.00 max 1.00");
-        assert_eq!(w.feed_bin_r.side_summary(F), "500 ticks, 0 with nothing to send, 0 backlogs dropped; buffer frames avg 1.00 min 1.00 max 1.00; 0 cut to one frame");
+        assert_eq!(w.feed_bin_r.side_summary(F), "500 ticks, 0 with nothing to send, 0 backlogs dropped; buffer frames avg 1.00 min 1.00 max 1.00; 0 cut back to RX1");
         assert_eq!(w.feed_rx2.side_summary(F), w.feed_bin_r.side_summary(F));
         push_frame(&mut b, true);
         let t = b.step(&mut w, true);
         assert_eq!(t.rx1, t.bin_r, "left and right one again");
     }
 
-    /// Ordinary jitter - an empty tick, then two frames - is lined up after
-    /// every empty tick, keeps left and right together, and is not a cut.
+    /// Ordinary jitter - an empty tick, then two frames - is carried: one empty
+    /// tick, after which the second frame is the reserve that fills the next
+    /// gap, left and right together, and no cut. Until 2.13.3 build 11 each
+    /// empty tick lined the buffer up and threw that frame away, so half the
+    /// ticks went out empty.
     #[test]
-    fn jitter_is_lined_up_and_is_not_a_cut() {
+    fn jitter_is_carried_and_is_not_a_cut() {
         let (mut b, mut w) = (super::ThetisBuffers::new(F), super::RxWindow::new());
         thetis_run(&mut b, &mut w, &[1; 10], true, true);
         w = super::RxWindow::new();
         let pattern: Vec<usize> = (0..500).map(|t| if t % 2 == 0 { 0 } else { 2 }).collect();
         thetis_run(&mut b, &mut w, &pattern, true, true);
-        let line = "500 ticks, 250 with nothing to send, 0 backlogs dropped; buffer frames avg 1.00 min 0.00 max 2.00";
+        let line = "500 ticks, 1 with nothing to send, 0 backlogs dropped; buffer frames avg 1.50 min 0.00 max 2.00";
         assert_eq!(w.feed.summary(F), line);
-        assert_eq!(w.feed_bin_r.side_summary(F), format!("{}; 0 cut to one frame", line));
+        assert_eq!(w.feed_bin_r.side_summary(F), format!("{}; 0 cut back to RX1", line));
+        assert_eq!(w.feed_rx2.side_summary(F), format!("{}; 0 cut back to RX1", line));
+    }
+
+    /// The source of 2026-11-09: blocks of 2048 samples every 42.7 ms (hpsdr-rs,
+    /// whatever audio_stream_samples asks) against a 20 ms tick at 48 kHz. Once
+    /// the reserve has built up, no tick goes out empty and nothing is thrown
+    /// away; until 2.13.3 build 11, 220 of 500 ticks went out empty. And the
+    /// standing reserve is under three frames.
+    #[test]
+    fn blocks_of_2048_go_out_without_gaps() {
+        const RATE_F: usize = 960;
+        let mut b = super::ThetisBuffers::new(RATE_F);
+        let mut w = super::RxWindow::new();
+        let block = vec![0.0f32; 2048];
+        // Time in microseconds: ticks every 20 000, blocks every 42 667.
+        let mut next_block = 0u64;
+        let mut sent = 0usize;
+        let mut arrived = 0usize;
+        for tick in 0..3000u64 {
+            let now = tick * 20_000;
+            while next_block <= now {
+                b.rx1.extend_from_slice(&block);
+                b.bin_r.extend_from_slice(&block);
+                b.rx2.extend_from_slice(&block);
+                arrived += block.len();
+                next_block += 42_667;
+            }
+            if tick == 500 {
+                w = super::RxWindow::new();
+                sent = 0;
+                arrived = b.rx1.len();
+            }
+            let t = b.step(&mut w, true);
+            if let Some(f) = &t.rx1 {
+                sent += f.len();
+                assert_eq!(t.bin_r.as_ref(), Some(f), "tick {tick}: the right with the left");
+            }
+            if tick >= 500 {
+                assert!(b.rx1.len() < 3 * RATE_F, "tick {tick}: reserve {} samples", b.rx1.len());
+            }
+        }
+        assert_eq!(w.feed.starved, 0, "{}", w.feed.summary(RATE_F));
+        assert_eq!(w.feed_bin_r.cuts(), 0);
+        // What came in after tick 500 went out, give or take the reserve.
+        assert!(arrived.abs_diff(sent + b.rx1.len()) <= 3 * RATE_F, "arrived {arrived}, sent {sent}, left {}", b.rx1.len());
     }
 
     /// Over many random feeds of zero to three frames a tick:
     /// - `max` never passes the ceiling of ten frames;
     /// - `min 0.00` always comes with at least one tick with nothing to send;
-    /// - while RX1 never held more than two frames, the binaural right reads
-    ///   exactly as RX1 and was never cut - left and right cannot part.
+    /// - the binaural right reads exactly as RX1 and is never cut - left and
+    ///   right cannot part (until 2.13.3 build 11 only while RX1 never held
+    ///   more than two frames).
     #[test]
     fn the_reading_rules_hold_over_random_feeds() {
         let mut seed = 0x2545_f491_u32;
-        let mut parted_only_above_two = 0;
+        let mut above_two = 0;
         let mut stayed_at_two = 0;
         for run in 0..300 {
             let (mut b, mut w) = (super::ThetisBuffers::new(F), super::RxWindow::new());
@@ -2484,16 +2627,17 @@ mod tests {").unwrap()];
                     assert!(f.starved > 0, "min 0.00 without nothing-to-send");
                 }
             }
+            assert_eq!(w.feed_bin_r.summary(F), w.feed.summary(F), "run {run}");
+            assert_eq!(w.feed_bin_r.cuts(), 0, "run {run}");
             if w.feed.fill_max <= 2 * F {
-                assert_eq!(w.feed_bin_r.summary(F), w.feed.summary(F));
-                assert_eq!(w.feed_bin_r.cuts(), 0);
                 stayed_at_two += 1;
-            } else if w.feed_bin_r.summary(F) != w.feed.summary(F) {
-                parted_only_above_two += 1;
+            } else {
+                above_two += 1;
             }
         }
-        // Both states, or the test proves nothing about one of them.
-        assert!(parted_only_above_two > 0, "the feeds never held three frames");
+        // Both states, or the test proves nothing about one of them: above two
+        // frames is where the right used to part from the left.
+        assert!(above_two > 0, "the feeds never held three frames");
         assert!(stayed_at_two > 0, "the feeds never stayed at two frames");
     }
 

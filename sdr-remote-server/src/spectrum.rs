@@ -13,6 +13,240 @@ use sdr_remote_core::{
     ddc_fft_size, SPECTRUM_BINS, SPECTRUM_PACK_FLOOR_DB, SPECTRUM_PACK_MAX, SPECTRUM_PACK_RANGE_DB,
 };
 
+/// How far the passband may stand above the spectrum's own floor and still
+/// count as empty. The calibration against the S-meter only learns from an
+/// empty passband: with a signal in it the peak-held bins rise at once and the
+/// S-meter far less, and the whole spectrum sank with every word spoken there.
+pub const CAL_QUIET_EXCESS_DB: f32 = 6.0;
+
+/// How long the passband has to stay empty after a signal before the
+/// calibration learns again. The S-meter is an average and still stands high
+/// in the pauses between words and for a while after the last one; learning
+/// there lifted the whole spectrum during an over and dropped it after.
+pub const CAL_SIGNAL_HOLDOFF: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A smoothed bin as linear power (mW): the packed scale back to dBm.
+fn bin_power(packed: f32) -> f64 {
+    let db = packed as f64 * SPECTRUM_PACK_RANGE_DB as f64 / SPECTRUM_PACK_MAX as f64 + SPECTRUM_PACK_FLOOR_DB as f64;
+    10.0_f64.powf(db / 10.0)
+}
+
+/// The passband's power from the smoothed bins: the linear power of every bin
+/// it overlaps summed, an edge bin by the part it overlaps, together with the
+/// width that sum covers, in bins. Both the passband power and its height over
+/// the floor are taken from this one sum. `None` without bins or when the
+/// passband lies outside them.
+fn passband_power(
+    smoothed: &[f32],
+    sample_rate_hz: u32,
+    vfo_offset_hz: f64,
+    filter_low: i32,
+    filter_high: i32,
+) -> Option<(f64, f64)> {
+    let n = smoothed.len();
+    if n == 0 || sample_rate_hz == 0 {
+        return None;
+    }
+    let hz_per_bin = sample_rate_hz as f64 / n as f64;
+    let half = (n / 2) as f64;
+    let bin_lo_f = half + (vfo_offset_hz + filter_low as f64) / hz_per_bin;
+    let bin_hi_f = half + (vfo_offset_hz + filter_high as f64) / hz_per_bin;
+    let first = (bin_lo_f.floor() as isize).max(0) as usize;
+    let last = ((bin_hi_f.ceil() as isize) - 1).clamp(0, n as isize - 1) as usize;
+    if first > last {
+        return None;
+    }
+    let mut power = 0.0f64;
+    let mut width = 0.0f64;
+    for (i, &v) in smoothed.iter().enumerate().take(last + 1).skip(first) {
+        let overlap = ((i + 1) as f64).min(bin_hi_f) - (i as f64).max(bin_lo_f);
+        if overlap <= 0.0 {
+            continue;
+        }
+        power += overlap * bin_power(v);
+        width += overlap;
+    }
+    if power <= 0.0 {
+        return None;
+    }
+    Some((power, width))
+}
+
+/// The passband's power in dBm, without the calibration offset: the
+/// passband sum plus 3 dB for the Hann window's coherent gain and the FFT
+/// normalisation. `None` without real data, without bins, or when the
+/// passband lies outside them.
+fn raw_passband_dbm(
+    smoothed: &[f32],
+    has_real_data: bool,
+    sample_rate_hz: u32,
+    vfo_offset_hz: f64,
+    filter_low: i32,
+    filter_high: i32,
+) -> Option<f32> {
+    if !has_real_data {
+        return None;
+    }
+    let (power, _) = passband_power(smoothed, sample_rate_hz, vfo_offset_hz, filter_low, filter_high)?;
+    Some((10.0 * power.log10() + 3.0) as f32)
+}
+
+/// The passband over the floor of the whole spectrum, in dB: the passband's
+/// power against the power the same width would have at the median of all
+/// bins. Measured as power, like the calibration step itself, so a carrier
+/// a few bins wide counts as fully as speech across the whole passband.
+/// `None` without bins or when the passband lies outside them.
+fn passband_excess_db(
+    smoothed: &[f32],
+    sample_rate_hz: u32,
+    vfo_offset_hz: f64,
+    filter_low: i32,
+    filter_high: i32,
+) -> Option<f32> {
+    let (power, width) = passband_power(smoothed, sample_rate_hz, vfo_offset_hz, filter_low, filter_high)?;
+    let mut all = smoothed.to_vec();
+    let mid = all.len() / 2;
+    let (_, median, _) = all.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
+    let floor = width * bin_power(*median);
+    Some((10.0 * (power / floor).log10()) as f32)
+}
+
+/// What one tick of the calibration against the S-meter did.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CalStep {
+    /// The passband was empty: the offset moved a tenth towards the S-meter.
+    Learned,
+    /// A signal stood in the passband: the offset was held.
+    HeldForSignal,
+    /// The passband was empty, but a signal stood in it less than
+    /// `CAL_SIGNAL_HOLDOFF` ago: the offset was held.
+    WaitingAfterSignal,
+    /// No usable S-meter or passband reading.
+    NoReading,
+}
+
+/// One tick of the calibration of a receiver's spectrum against the S-meter
+/// the radio software reports, for a receiver without a step attenuator
+/// reading. RX1 and RX2 both ask this. The offset is a property of the
+/// receive chain, so it is learned only while the passband holds nothing but
+/// noise (`CAL_QUIET_EXCESS_DB`) and has done so for `CAL_SIGNAL_HOLDOFF`;
+/// `last_signal` is when this receiver last had a signal in its passband.
+/// `raw_dbm` is `None` when the passband gave no reading.
+pub fn calibrate_against_smeter(
+    static_cal: f32,
+    current: f32,
+    smeter_dbm: f32,
+    raw_dbm: Option<f32>,
+    excess_db: Option<f32>,
+    last_signal: &mut Option<Instant>,
+    now: Instant,
+) -> (f32, CalStep) {
+    let held = if current.abs() < 0.01 { static_cal } else { current };
+    let Some(raw_dbm) = raw_dbm.filter(|raw| *raw > -130.0 && smeter_dbm > -130.0) else {
+        return (held, CalStep::NoReading);
+    };
+    match excess_db {
+        Some(excess) if excess < CAL_QUIET_EXCESS_DB => {
+            if last_signal.is_some_and(|at| now.saturating_duration_since(at) < CAL_SIGNAL_HOLDOFF) {
+                return (held, CalStep::WaitingAfterSignal);
+            }
+            let dynamic = smeter_dbm - raw_dbm - static_cal;
+            let cur_dynamic = current - static_cal;
+            (static_cal + cur_dynamic * 0.9 + dynamic * 0.1, CalStep::Learned)
+        }
+        _ => {
+            *last_signal = Some(now);
+            (held, CalStep::HeldForSignal)
+        }
+    }
+}
+
+/// A tick while transmitting: the calibration does not run, and the
+/// receivers hear our own signal. The hold-off after a signal starts again at
+/// every such tick, so after the release the calibration waits
+/// `CAL_SIGNAL_HOLDOFF` as it does after a signal received.
+pub fn hold_calibration_while_transmitting(last_signal: &mut Option<Instant>, now: Instant) {
+    *last_signal = Some(now);
+}
+
+/// Ten seconds of the calibration against the S-meter for one receiver, as
+/// one log line: how often it learned, how often a signal held it, how far the
+/// passband stood over the floor, and where the offset went.
+pub struct CalWatch {
+    name: &'static str,
+    started: Option<Instant>,
+    learned: u32,
+    held: u32,
+    waiting: u32,
+    no_reading: u32,
+    on_the_air: u32,
+    excess: Option<(f32, f32)>,
+    offset: Option<(f32, f32)>,
+}
+
+impl CalWatch {
+    pub fn new(name: &'static str) -> Self {
+        Self { name, started: None, learned: 0, held: 0, waiting: 0, no_reading: 0, on_the_air: 0, excess: None, offset: None }
+    }
+
+    /// Count one tick on the air: the calibration did not run, and the
+    /// hold-off started again. Shown in the next line.
+    pub fn note_on_the_air(&mut self) {
+        self.on_the_air += 1;
+    }
+
+    /// Count one tick; every ten seconds the line to log.
+    #[allow(clippy::too_many_arguments)]
+    pub fn note(
+        &mut self,
+        step: CalStep,
+        excess_db: Option<f32>,
+        smeter_dbm: f32,
+        raw_dbm: Option<f32>,
+        offset_db: f32,
+        static_cal: f32,
+        now: Instant,
+    ) -> Option<String> {
+        let started = *self.started.get_or_insert(now);
+        match step {
+            CalStep::Learned => self.learned += 1,
+            CalStep::HeldForSignal => self.held += 1,
+            CalStep::WaitingAfterSignal => self.waiting += 1,
+            CalStep::NoReading => self.no_reading += 1,
+        }
+        let widen = |range: Option<(f32, f32)>, v: f32| Some(range.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))));
+        if let Some(e) = excess_db {
+            self.excess = widen(self.excess, e);
+        }
+        self.offset = widen(self.offset, offset_db);
+        if now.duration_since(started) < std::time::Duration::from_secs(10) {
+            return None;
+        }
+        let range = |r: Option<(f32, f32)>| r.map_or("-".to_string(), |(lo, hi)| format!("{lo:.1}..{hi:.1}"));
+        let line = format!(
+            concat!(
+                "Spectrum {} calibration against the S-meter (10 s): learned {}, held for a signal {}, ",
+                "waiting after a signal {}, no reading {}, on the air {}; passband over the floor {} dB (held from {:.0}); ",
+                "offset {} dB (static {static_cal:.1}); now S-meter {smeter_dbm:.1} dBm, passband {raw} dBm raw"
+            ),
+            self.name,
+            self.learned,
+            self.held,
+            self.waiting,
+            self.no_reading,
+            self.on_the_air,
+            range(self.excess),
+            CAL_QUIET_EXCESS_DB,
+            range(self.offset),
+            static_cal = static_cal,
+            smeter_dbm = smeter_dbm,
+            raw = raw_dbm.map_or("-".to_string(), |r| format!("{r:.1}")),
+        );
+        *self = Self::new(self.name);
+        Some(line)
+    }
+}
+
 /// The calibration offset in dB as a shift on the packed bin scale.
 fn cal_shift(cal_offset_db: f32) -> f32 {
     cal_offset_db * SPECTRUM_PACK_MAX / SPECTRUM_PACK_RANGE_DB
@@ -670,60 +904,22 @@ impl SpectrumProcessor {
         levels_of(&self.smoothed, self.cal_offset_db)
     }
 
-    /// Compute total power in the receiver passband from the smoothed FFT bins.
-    /// filter_low/high are in Hz relative to VFO (e.g. 50..2850 for USB, -2850..-50 for LSB).
-    /// Edge bins are weighted by their fractional overlap with the passband.
-    /// Sums linear power (integration), so both narrowband signals and wideband noise
-    /// are correctly measured. Returns power in dBm.
-    pub fn compute_passband_power_dbm(&self, filter_low: i32, filter_high: i32) -> f32 {
-        let n = self.smoothed.len();
-        if n == 0 || !self.has_real_data || self.sample_rate_hz == 0 {
-            return -140.0;
-        }
-        let hz_per_bin = self.sample_rate_hz as f64 / n as f64;
-        let half = n / 2;
-
-        // VFO offset from DDC center
+    /// The passband's power in dBm without the calibration offset, for the
+    /// calibration (`raw_passband_dbm`). filter_low/high are in Hz relative
+    /// to the VFO (e.g. 50..2850 for USB, -2850..-50 for LSB). `None` when
+    /// there is no reading.
+    pub fn compute_raw_passband_power_dbm(&self, filter_low: i32, filter_high: i32) -> Option<f32> {
         let vfo_offset_hz = self.vfo_freq_hz as f64 - self.ddc_center_hz as f64;
-
-        // Passband edges as fractional bin positions
-        let bin_lo_f = half as f64 + (vfo_offset_hz + filter_low as f64) / hz_per_bin;
-        let bin_hi_f = half as f64 + (vfo_offset_hz + filter_high as f64) / hz_per_bin;
-
-        // Integer bin range that overlaps the passband
-        let first = (bin_lo_f.floor() as isize).max(0) as usize;
-        let last = ((bin_hi_f.ceil() as isize) - 1).clamp(0, n as isize - 1) as usize;
-
-        if first > last {
-            return -140.0;
-        }
-
-        // Sum linear power across passband bins (integrate, not average).
-        // Each bin covers [i, i+1) in bin-units. Edge bins get fractional weight.
-        // smoothed[i] is 0-255 -> dB = val * 120/255 - 150
-        let mut sum_power = 0.0f64;
-
-        for i in first..=last {
-            let overlap = ((i + 1) as f64).min(bin_hi_f) - (i as f64).max(bin_lo_f);
-            if overlap <= 0.0 { continue; }
-
-            let db = self.smoothed[i] as f64 * SPECTRUM_PACK_RANGE_DB as f64
-                / SPECTRUM_PACK_MAX as f64
-                + SPECTRUM_PACK_FLOOR_DB as f64;
-            sum_power += overlap * 10.0_f64.powf(db / 10.0);
-        }
-
-        if sum_power <= 0.0 {
-            return -140.0;
-        }
-
-        // +3 dB correction for Hann window coherent gain / FFT normalization
-        (10.0 * sum_power.log10() + 3.0) as f32 + self.cal_offset_db
+        raw_passband_dbm(&self.smoothed, self.has_real_data, self.sample_rate_hz, vfo_offset_hz, filter_low, filter_high)
     }
 
-    /// Raw passband power without calibration offset (for auto-calibration).
-    pub fn compute_raw_passband_power_dbm(&self, filter_low: i32, filter_high: i32) -> f32 {
-        self.compute_passband_power_dbm(filter_low, filter_high) - self.cal_offset_db
+    /// The passband over the floor of the whole spectrum, in dB (`passband_excess_db`).
+    pub fn passband_excess_db(&self, filter_low: i32, filter_high: i32) -> Option<f32> {
+        if !self.has_real_data {
+            return None;
+        }
+        let vfo_offset_hz = self.vfo_freq_hz as f64 - self.ddc_center_hz as f64;
+        passband_excess_db(&self.smoothed, self.sample_rate_hz, vfo_offset_hz, filter_low, filter_high)
     }
 
     /// Shift the smoothed buffer when center frequency changes.
@@ -1053,39 +1249,22 @@ impl Rx2SpectrumProcessor {
         }
     }
 
-    /// Compute total power in the receiver passband (same algorithm as RX1).
-    pub fn compute_passband_power_dbm(&self, filter_low: i32, filter_high: i32) -> f32 {
-        let n = self.smoothed.len();
-        if n == 0 || !self.has_real_data || self.sample_rate_hz == 0 {
-            return -140.0;
-        }
-        let hz_per_bin = self.sample_rate_hz as f64 / n as f64;
-        let half = n / 2;
+    /// The passband's power in dBm without the calibration offset, for the
+    /// calibration (`raw_passband_dbm`). filter_low/high are in Hz relative
+    /// to the VFO (e.g. 50..2850 for USB, -2850..-50 for LSB). `None` when
+    /// there is no reading.
+    pub fn compute_raw_passband_power_dbm(&self, filter_low: i32, filter_high: i32) -> Option<f32> {
         let vfo_offset_hz = self.vfo_freq_hz as f64 - self.ddc_center_hz as f64;
-        let bin_lo_f = half as f64 + (vfo_offset_hz + filter_low as f64) / hz_per_bin;
-        let bin_hi_f = half as f64 + (vfo_offset_hz + filter_high as f64) / hz_per_bin;
-        let first = (bin_lo_f.floor() as isize).max(0) as usize;
-        let last = ((bin_hi_f.ceil() as isize) - 1).clamp(0, n as isize - 1) as usize;
-        if first > last { return -140.0; }
-
-        let mut sum_power = 0.0f64;
-        for i in first..=last {
-            let overlap = ((i + 1) as f64).min(bin_hi_f) - (i as f64).max(bin_lo_f);
-            if overlap <= 0.0 { continue; }
-            let db = self.smoothed[i] as f64 * SPECTRUM_PACK_RANGE_DB as f64
-                / SPECTRUM_PACK_MAX as f64
-                + SPECTRUM_PACK_FLOOR_DB as f64;
-            sum_power += overlap * 10.0_f64.powf(db / 10.0);
-        }
-        if sum_power <= 0.0 { return -140.0; }
-        // +3 dB correction for Hann window coherent gain / FFT normalization
-        // + calibration offset to compensate for hardware attenuator/preamp
-        (10.0 * sum_power.log10() + 3.0) as f32 + self.cal_offset_db
+        raw_passband_dbm(&self.smoothed, self.has_real_data, self.sample_rate_hz, vfo_offset_hz, filter_low, filter_high)
     }
 
-    /// Raw passband power without calibration offset (for auto-calibration).
-    pub fn compute_raw_passband_power_dbm(&self, filter_low: i32, filter_high: i32) -> f32 {
-        self.compute_passband_power_dbm(filter_low, filter_high) - self.cal_offset_db
+    /// The passband over the floor of the whole spectrum, in dB (`passband_excess_db`).
+    pub fn passband_excess_db(&self, filter_low: i32, filter_high: i32) -> Option<f32> {
+        if !self.has_real_data {
+            return None;
+        }
+        let vfo_offset_hz = self.vfo_freq_hz as f64 - self.ddc_center_hz as f64;
+        passband_excess_db(&self.smoothed, self.sample_rate_hz, vfo_offset_hz, filter_low, filter_high)
     }
 
     /// Set VFO-B frequency. Same CTUN logic as RX1:
@@ -1682,5 +1861,426 @@ mod fft_size_tests {
             rx2.set_fft_size(asked);
             assert_eq!((rx1.current_fft_size(), rx2_size(&rx2)), (runs, runs), "asked {asked}K");
         }
+    }
+}
+
+#[cfg(test)]
+mod smeter_calibration_tests {
+    use super::{
+        calibrate_against_smeter, hold_calibration_while_transmitting, passband_excess_db, CalStep, CalWatch,
+        Rx2SpectrumProcessor, SpectrumProcessor, CAL_QUIET_EXCESS_DB, CAL_SIGNAL_HOLDOFF,
+    };
+    use sdr_remote_core::{SPECTRUM_PACK_MAX, SPECTRUM_PACK_RANGE_DB};
+    use std::time::{Duration, Instant};
+
+    /// Packed bins for a flat floor, with `db` dB more over the bins
+    /// `from..to`. 1024 bins over 96 kHz: 93.75 Hz a bin, the VFO in the middle.
+    fn bins(from: usize, to: usize, db: f32) -> Vec<f32> {
+        let floor = 20_000.0f32;
+        let step = db * SPECTRUM_PACK_MAX / SPECTRUM_PACK_RANGE_DB;
+        (0..1024).map(|i| if (from..to).contains(&i) { floor + step } else { floor + (i % 7) as f32 }).collect()
+    }
+
+    const RATE: u32 = 96_000;
+
+    /// One tick of a receiver that has not had a signal for long.
+    fn quiet_tick(static_cal: f32, current: f32, smeter: f32, raw: f32, excess: Option<f32>) -> (f32, CalStep) {
+        calibrate_against_smeter(static_cal, current, smeter, Some(raw), excess, &mut None, Instant::now())
+    }
+
+    /// The passband over the floor: about 0 for noise, the signal's height for
+    /// a signal in the passband, and about 0 again for a signal beside it.
+    #[test]
+    fn the_passband_stands_over_the_floor_only_with_a_signal_in_it() {
+        // USB 0..2800 Hz from the VFO at bin 512: bins 512..542.
+        let quiet = passband_excess_db(&bins(0, 0, 0.0), RATE, 0.0, 0, 2_800).unwrap();
+        assert!(quiet.abs() < 0.1, "noise only: {quiet}");
+        let inside = passband_excess_db(&bins(512, 542, 20.0), RATE, 0.0, 0, 2_800).unwrap();
+        assert!((inside - 20.0).abs() < 0.5, "a signal filling the passband: {inside}");
+        let beside = passband_excess_db(&bins(600, 630, 30.0), RATE, 0.0, 0, 2_800).unwrap();
+        assert!(beside.abs() < 0.1, "a signal beside the passband: {beside}");
+        // The VFO off-centre moves the passband with it.
+        let moved = passband_excess_db(&bins(600, 630, 30.0), RATE, 88.0 * 93.75, 0, 2_800).unwrap();
+        assert!((moved - 30.0).abs() < 0.5, "the passband follows the VFO: {moved}");
+        // LSB -2800..0 Hz: bins 482..512, below the VFO; its mirror above does not count.
+        let lsb = passband_excess_db(&bins(482, 512, 20.0), RATE, 0.0, -2_800, 0).unwrap();
+        assert!((lsb - 20.0).abs() < 0.5, "a signal in the LSB passband: {lsb}");
+        let mirrored = passband_excess_db(&bins(512, 542, 20.0), RATE, 0.0, -2_800, 0).unwrap();
+        assert!(mirrored.abs() < 0.1, "the same signal on the USB side: {mirrored}");
+        assert_eq!(passband_excess_db(&[], RATE, 0.0, 0, 2_800), None);
+        assert_eq!(passband_excess_db(&bins(0, 0, 0.0), RATE, 1.0e6, 0, 2_800), None, "outside the bins");
+    }
+
+    /// An empty passband teaches the offset, a tenth a tick, as before; a
+    /// signal in it holds the offset however far the S-meter lags.
+    #[test]
+    fn a_signal_in_the_passband_holds_the_calibration() {
+        let static_cal = -10.0;
+        // Quiet for long: the old step, exactly.
+        let (learned, step) = quiet_tick(static_cal, -12.0, -100.0, -95.0, Some(0.5));
+        assert_eq!(step, CalStep::Learned);
+        let dynamic = -100.0 - -95.0 - static_cal;
+        assert_eq!(learned, static_cal + (-12.0 - static_cal) * 0.9 + dynamic * 0.1);
+        // Someone talks in the passband: our bins jump 15 dB, the S-meter 3.
+        // A hundred ticks (ten seconds), twice in a row, with one memory of
+        // the last signal and the clock running: the offset stands, and the
+        // first empty tick after it waits.
+        let start = Instant::now();
+        let mut last_signal = None;
+        let mut offset = -12.0;
+        let mut ms = 0u64;
+        for pass in 0..2 {
+            for tick in 0..100 {
+                let now = start + Duration::from_millis(ms);
+                let (next, step) = calibrate_against_smeter(static_cal, offset, -97.0, Some(-80.0), Some(15.0), &mut last_signal, now);
+                assert_eq!(step, CalStep::HeldForSignal, "pass {pass} tick {tick}");
+                assert_eq!(next, offset);
+                assert_eq!(last_signal, Some(now), "pass {pass} tick {tick}: the signal is remembered");
+                offset = next;
+                ms += 100;
+            }
+            let now = start + Duration::from_millis(ms);
+            let (next, step) = calibrate_against_smeter(static_cal, offset, -100.0, Some(-95.0), Some(0.5), &mut last_signal, now);
+            assert_eq!((next, step), (offset, CalStep::WaitingAfterSignal), "pass {pass}: right after the signal");
+            ms += 100;
+        }
+        // The ticks below stand for a receiver without a signal for long, so
+        // each one starts without a memory of one (`quiet_tick`).
+        // Just under the threshold still learns; at it, holds.
+        assert_eq!(quiet_tick(static_cal, -12.0, -100.0, -95.0, Some(CAL_QUIET_EXCESS_DB - 0.01)).1, CalStep::Learned);
+        assert_eq!(quiet_tick(static_cal, -12.0, -100.0, -95.0, Some(CAL_QUIET_EXCESS_DB)).1, CalStep::HeldForSignal);
+        // A gate reading missing beside a raw reading holds and stamps, as a
+        // signal would. It cannot happen today: both readings have the same
+        // guard (`no_reading_is_no_signal` covers a missing raw reading).
+        assert_eq!(quiet_tick(static_cal, -12.0, -100.0, -95.0, None), (-12.0, CalStep::HeldForSignal));
+        assert_eq!(CAL_QUIET_EXCESS_DB, 6.0);
+    }
+
+    /// An over as the field log of build 24 showed it: words with pauses in
+    /// between, the S-meter still high in every pause. Nothing is learned
+    /// during the over, nor in the five seconds after the last word; then the
+    /// quiet band teaches again. Two overs in a row.
+    #[test]
+    fn the_pauses_of_an_over_teach_nothing() {
+        assert_eq!(CAL_SIGNAL_HOLDOFF, Duration::from_secs(5));
+        let static_cal = 0.0;
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut last_signal = None;
+        let mut offset = 10.0;
+        let mut ms = 0u64;
+        for over in 0..2 {
+            // 15 s of speech: 600 ms of words, 400 ms of pause, the S-meter at
+            // -55 dBm throughout and our passband back on the floor in a pause.
+            let mut last_word = ms;
+            for tick in 0..150 {
+                let in_word = tick % 10 < 6;
+                let (excess, raw) = if in_word { (Some(20.0), Some(-65.0)) } else { (Some(1.0), Some(-86.0)) };
+                let (next, step) = calibrate_against_smeter(static_cal, offset, -55.0, raw, excess, &mut last_signal, at(ms));
+                let want = if in_word { CalStep::HeldForSignal } else { CalStep::WaitingAfterSignal };
+                assert_eq!(step, want, "over {over} tick {tick}");
+                assert_eq!(next, offset, "over {over} tick {tick}: the offset stands");
+                if in_word {
+                    last_word = ms;
+                }
+                offset = next;
+                ms += 100;
+            }
+            // Released: the S-meter sinks back over the next seconds. Within
+            // five seconds of the last word nothing is learned; after it the
+            // quiet band teaches, and the offset comes back to where it was.
+            for tick in 0..100 {
+                let since_word = Duration::from_millis(ms - last_word);
+                let smeter = -76.0 + 21.0 * (-(since_word.as_secs_f32()) / 1.5).exp();
+                let (next, step) = calibrate_against_smeter(static_cal, offset, smeter, Some(-86.0), Some(1.0), &mut last_signal, at(ms));
+                if since_word < CAL_SIGNAL_HOLDOFF {
+                    assert_eq!(step, CalStep::WaitingAfterSignal, "over {over} tick {tick}, {since_word:?} after");
+                    assert_eq!(next, offset);
+                } else {
+                    assert_eq!(step, CalStep::Learned, "over {over} tick {tick}, {since_word:?} after");
+                }
+                offset = next;
+                ms += 100;
+            }
+            assert!((offset - 10.0).abs() < 0.5, "over {over}: back at the quiet calibration, {offset}");
+        }
+    }
+
+    /// The geometry in the field: 65536 bins over 192 kHz, 2.93 Hz a bin.
+    const REAL_RATE: u32 = 192_000;
+    const REAL_BINS: usize = 65_536;
+    const CENTRE_HZ: u64 = 7_100_000;
+
+    /// Packed bins of a floor with a ripple of about 0.7 dB, with `db` dB more
+    /// from `from_hz` to `to_hz` off the DDC centre.
+    fn real_bins(from_hz: i64, to_hz: i64, db: f32) -> Vec<f32> {
+        let hz_per_bin = REAL_RATE as f64 / REAL_BINS as f64;
+        let half = (REAL_BINS / 2) as f64;
+        let at = |hz: i64| (half + hz as f64 / hz_per_bin).round() as usize;
+        let (from, to) = (at(from_hz), at(to_hz));
+        let step = db * SPECTRUM_PACK_MAX / SPECTRUM_PACK_RANGE_DB;
+        (0..REAL_BINS)
+            .map(|i| 20_000.0 + (i * 7_919 % 13) as f32 * 30.0 + if (from..to).contains(&i) { step } else { 0.0 })
+            .collect()
+    }
+
+    /// What the calibration reads through a receiver's own methods: the
+    /// passband over the floor, and the raw passband power. Each receiver
+    /// carries an offset of -20 dB, which the raw reading leaves out.
+    fn read(rx2: bool, smoothed: Vec<f32>, has_data: bool, vfo_off_hz: i64, lo: i32, hi: i32) -> (Option<f32>, Option<f32>) {
+        let vfo_hz = (CENTRE_HZ as i64 + vfo_off_hz) as u64;
+        if rx2 {
+            let mut sp = Rx2SpectrumProcessor::new();
+            sp.smoothed = smoothed;
+            sp.sample_rate_hz = REAL_RATE;
+            sp.has_real_data = has_data;
+            sp.vfo_freq_hz = vfo_hz;
+            sp.ddc_center_hz = CENTRE_HZ;
+            sp.cal_offset_db = -20.0;
+            (sp.passband_excess_db(lo, hi), sp.compute_raw_passband_power_dbm(lo, hi))
+        } else {
+            let mut sp = SpectrumProcessor::new();
+            sp.smoothed = smoothed;
+            sp.sample_rate_hz = REAL_RATE;
+            sp.has_real_data = has_data;
+            sp.vfo_freq_hz = vfo_hz;
+            sp.ddc_center_hz = CENTRE_HZ;
+            sp.cal_offset_db = -20.0;
+            (sp.passband_excess_db(lo, hi), sp.compute_raw_passband_power_dbm(lo, hi))
+        }
+    }
+
+    /// Each receiver reads its own passband: USB above the VFO, LSB below it,
+    /// with the VFO in the middle of the DDC and 20 kHz beside it. A signal
+    /// there holds; the same signal mirrored to the other side of the VFO
+    /// does not; without data there is no reading.
+    #[test]
+    fn both_receivers_read_their_own_passband() {
+        for rx2 in [false, true] {
+            for (vfo_off, lo, hi) in [(0i64, 0, 2_800), (0, -2_800, 0), (20_000, 0, 2_800), (-20_000, -2_800, 0)] {
+                let case = format!("rx2 {rx2}, VFO {vfo_off:+} Hz, {lo}..{hi}");
+                let (lo_hz, hi_hz) = (vfo_off + lo as i64 + 200, vfo_off + hi as i64 - 200);
+                let inside = read(rx2, real_bins(lo_hz, hi_hz, 20.0), true, vfo_off, lo, hi).0.unwrap();
+                assert!(inside >= CAL_QUIET_EXCESS_DB, "{case}: a signal in the passband, {inside}");
+                let (mirror_lo, mirror_hi) = (2 * vfo_off - hi_hz, 2 * vfo_off - lo_hz);
+                let mirrored = read(rx2, real_bins(mirror_lo, mirror_hi, 20.0), true, vfo_off, lo, hi).0.unwrap();
+                assert!(mirrored < 1.0, "{case}: the same signal mirrored, {mirrored}");
+                let quiet = read(rx2, real_bins(0, 0, 0.0), true, vfo_off, lo, hi).0.unwrap();
+                assert!(quiet < 1.0, "{case}: noise only, {quiet}");
+                assert_eq!(read(rx2, real_bins(lo_hz, hi_hz, 20.0), false, vfo_off, lo, hi), (None, None), "{case}");
+            }
+        }
+    }
+
+    /// The number the step learns from, absolute, on both receivers: noise in
+    /// an SSB and in a CW passband of 50 Hz (its edges inside a bin, once with
+    /// the lower edge past half a bin, so a rounded edge shows), a 12 Hz
+    /// carrier 40 dB over the floor in that CW passband, a signal with the VFO
+    /// 20 kHz either side of the DDC centre, and a passband below the bins.
+    /// Worked out apart from this code, from the packed scale and the edge
+    /// weights.
+    #[test]
+    fn the_raw_passband_reading_is_absolute() {
+        for rx2 in [false, true] {
+            for (name, smoothed, vfo_off, lo, hi, want) in [
+                ("SSB noise", real_bins(0, 0, 0.0), 0i64, 0, 2_800, -80.24),
+                ("CW noise", real_bins(0, 0, 0.0), 0, 575, 625, -97.70),
+                ("CW noise, the lower edge past half a bin", real_bins(0, 0, 0.0), 0, 605, 655, -97.74),
+                ("CW carrier", real_bins(594, 606, 40.0), 0, 575, 625, -63.86),
+                ("USB, the VFO 20 kHz up", real_bins(20_200, 22_600, 20.0), 20_000, 0, 2_800, -60.90),
+                ("LSB, the VFO 20 kHz down", real_bins(-22_600, -20_200, 20.0), -20_000, -2_800, 0, -60.90),
+            ] {
+                let raw = read(rx2, smoothed, true, vfo_off, lo, hi).1.unwrap();
+                assert!((raw - want).abs() < 0.05, "rx2 {rx2}, {name}: {raw} dBm, want {want}");
+            }
+            let below = read(rx2, real_bins(0, 0, 0.0), true, -100_000, 0, 2_800);
+            assert_eq!(below, (None, None), "rx2 {rx2}: a passband below the bins, with data");
+        }
+    }
+
+    /// Without a reading the calibration neither learns nor holds, whatever
+    /// the offset: a receiver without data at an offset of -20 dB.
+    #[test]
+    fn no_reading_is_no_signal() {
+        for rx2 in [false, true] {
+            let (excess, raw) = read(rx2, real_bins(0, 0, 0.0), false, 0, 0, 2_800);
+            let mut last_signal = None;
+            let step = calibrate_against_smeter(-20.0, -20.0, -100.0, raw, excess, &mut last_signal, Instant::now());
+            assert_eq!(step, (-20.0, CalStep::NoReading), "rx2 {rx2}");
+            assert_eq!(last_signal, None, "rx2 {rx2}: no hold-off from a missing reading");
+        }
+    }
+
+    /// A carrier four bins wide (12 Hz) holds the calibration like speech
+    /// across the whole passband. The gate and the step take the same sum, so
+    /// the gate reads exactly what the signal adds to the passband power: a
+    /// signal too weak to hold moves the step by less than the threshold.
+    #[test]
+    fn a_carrier_a_few_bins_wide_holds_the_calibration() {
+        let (noise_excess, noise_raw) = read(false, real_bins(0, 0, 0.0), true, 0, 0, 2_800);
+        let noise_excess = noise_excess.unwrap();
+        let mut last_signal = None;
+        let now = Instant::now();
+        let quiet = calibrate_against_smeter(0.0, 10.0, -100.0, noise_raw, Some(noise_excess), &mut last_signal, now);
+        assert_eq!(quiet.1, CalStep::Learned, "noise only: {noise_excess}");
+        let carrier = real_bins(1_494, 1_506, 40.0);
+        let (excess, raw) = read(false, carrier.clone(), true, 0, 0, 2_800);
+        let excess = excess.unwrap();
+        assert!(excess >= CAL_QUIET_EXCESS_DB + 6.0, "a carrier 40 dB over the floor: {excess}");
+        let held = calibrate_against_smeter(0.0, 10.0, -100.0, raw, Some(excess), &mut last_signal, now);
+        assert_eq!(held, (10.0, CalStep::HeldForSignal));
+        assert_eq!(read(true, carrier, true, 0, 0, 2_800).0, Some(excess), "RX2 reads it the same");
+        for (from, to, db) in [(1_494, 1_506, 40.0), (1_494, 1_506, 20.0), (1_494, 1_506, 6.0), (300, 2_500, 3.0)] {
+            let (excess, raw) = read(false, real_bins(from, to, db), true, 0, 0, 2_800);
+            let (gate, step) = (excess.unwrap() - noise_excess, raw.unwrap() - noise_raw.unwrap());
+            assert!((gate - step).abs() < 0.01, "{from}..{to} Hz, {db} dB: gate {gate}, step {step}");
+        }
+    }
+
+    /// Our own over: the calibration does not run while transmitting, yet the
+    /// hold-off starts again at every tick of it, so after the release the
+    /// quiet ticks wait as after a signal received. Two overs in a row.
+    #[test]
+    fn transmitting_starts_the_hold_off_again() {
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut last_signal = None;
+        let mut offset = 10.0;
+        let mut ms = 0u64;
+        for over in 0..2 {
+            // Eight seconds of transmitting, longer than the hold-off.
+            for _ in 0..80 {
+                hold_calibration_while_transmitting(&mut last_signal, at(ms));
+                ms += 100;
+            }
+            let last_tx = ms - 100;
+            for tick in 0..60 {
+                let (next, step) = calibrate_against_smeter(0.0, offset, -60.0, Some(-86.0), Some(1.0), &mut last_signal, at(ms));
+                if Duration::from_millis(ms - last_tx) < CAL_SIGNAL_HOLDOFF {
+                    assert_eq!((next, step), (offset, CalStep::WaitingAfterSignal), "over {over} tick {tick}");
+                } else {
+                    assert_eq!(step, CalStep::Learned, "over {over} tick {tick}");
+                }
+                offset = next;
+                ms += 100;
+            }
+        }
+        // Without the ticks of the over, the wall clock alone had run the
+        // hold-off out by the release.
+        let mut before_the_over = Some(at(0));
+        let (_, step) = calibrate_against_smeter(0.0, 10.0, -60.0, Some(-86.0), Some(1.0), &mut before_the_over, at(8_100));
+        assert_eq!(step, CalStep::Learned);
+    }
+
+    /// Without a usable reading nothing is learned, and an offset never set
+    /// starts from the static calibration, as before; held does the same.
+    #[test]
+    fn without_a_reading_the_static_calibration_stands() {
+        assert_eq!(quiet_tick(-10.0, 0.0, -140.0, -95.0, Some(0.0)), (-10.0, CalStep::NoReading));
+        assert_eq!(quiet_tick(-10.0, 0.0, -100.0, -140.0, Some(0.0)), (-10.0, CalStep::NoReading));
+        let no_passband = calibrate_against_smeter(-10.0, -12.0, -100.0, None, None, &mut None, Instant::now());
+        assert_eq!(no_passband, (-12.0, CalStep::NoReading));
+        assert_eq!(quiet_tick(-10.0, -12.0, -140.0, -95.0, Some(0.0)), (-12.0, CalStep::NoReading));
+        assert_eq!(quiet_tick(-10.0, 0.0, -100.0, -95.0, Some(20.0)), (-10.0, CalStep::HeldForSignal));
+    }
+
+    /// RX1 and RX2 both ask the one function, each with its own memory of the
+    /// last signal; the step lives nowhere else.
+    #[test]
+    fn both_receivers_calibrate_through_the_one_function() {
+        let network = include_str!("network.rs");
+        let network = &network[..network.find("#[cfg(test)]").unwrap_or(network.len())];
+        assert_eq!(network.matches("crate::spectrum::calibrate_against_smeter(").count(), 2, "RX1 and RX2");
+        assert_eq!(network.matches("&mut cal_signal_rx1, now,").count(), 1);
+        assert_eq!(network.matches("&mut cal_signal_rx2, now,").count(), 1);
+        // Each receiver with its own passband and its own static calibration.
+        assert_eq!(network.matches("sp.passband_excess_db(filter_low, filter_high)").count(), 1);
+        assert_eq!(network.matches("rx2_sp.passband_excess_db(rx2_filter_low, rx2_filter_high)").count(), 1);
+        assert_eq!(network.matches("static_cal_rx1, sp.cal_offset_db(), tci_dbm, raw_dbm").count(), 1);
+        assert_eq!(network.matches("static_cal_rx2, rx2_sp.cal_offset_db(), tci_dbm, raw_dbm").count(), 1);
+        // The raw reading with the receiver's own filter edges, against its own S-meter.
+        assert_eq!(network.matches("let raw_dbm = sp.compute_raw_passband_power_dbm(filter_low, filter_high);").count(), 1);
+        assert_eq!(
+            network.matches("let raw_dbm = rx2_sp.compute_raw_passband_power_dbm(rx2_filter_low, rx2_filter_high);").count(),
+            1
+        );
+        assert_eq!(network.matches("} else if let Some(tci_dbm) = tci_smeter_dbm_rx1 {").count(), 1);
+        assert_eq!(network.matches("} else if let Some(tci_dbm) = tci_smeter_dbm_rx2 {").count(), 1);
+        // Both pause for anything on the air, not for our own PTT alone, and
+        // start their hold-off again at every such tick, with the time of it.
+        assert_eq!(network.matches("let on_the_air = ptt_guard.tx_now().on_the_air();").count(), 1);
+        let gates: Vec<usize> = network.match_indices("if !on_the_air {").map(|(i, _)| i).collect();
+        assert_eq!(gates.len(), 2, "RX1 and RX2");
+        let column = |at: usize| network[..at].rsplit('\n').next().unwrap_or("").len();
+        for (rx, gate) in [("rx1", gates[0]), ("rx2", gates[1])] {
+            let stamp = format!("crate::spectrum::hold_calibration_while_transmitting(&mut cal_signal_{rx}, Instant::now());");
+            assert_eq!(network.matches(stamp.as_str()).count(), 1, "{rx}");
+            let at = network.find(stamp.as_str()).unwrap();
+            assert!(network[..at].trim_end().ends_with("} else {"), "{rx}: the stamp is the else of the calibration");
+            // The else of the pause itself, not of a branch inside it, and the
+            // step attenuator's branch waits inside the pause too.
+            assert!(gate < at, "{rx}: the stamp after its own pause");
+            let block = &network[gate..at];
+            assert!(block.contains(&format!("if step_att_enabled_{rx} {{")), "{rx}: the step attenuator waits for the air too");
+            let els = gate + block.rfind("} else {").unwrap();
+            assert_eq!(column(els), column(gate), "{rx}: the stamp is the else of the pause itself");
+            let after = network[at + stamp.len()..].trim_start();
+            assert!(after.starts_with(&format!("cal_watch_{rx}.note_on_the_air();")), "{rx}: and counted in the line");
+        }
+        assert_eq!(network.matches("cal_watch_rx1.note(").count() + network.matches("cal_watch_rx2.note(").count(), 2);
+        // A measuring line, every ten seconds: only in developer mode, as the
+        // other `(10 s)` lines.
+        for rx in ["rx1", "rx2"] {
+            let at = network.find(&format!("cal_watch_{rx}.note(step,")).unwrap();
+            let after = &network[at..];
+            let next = after[after.find('{').unwrap() + 1..].trim_start();
+            assert!(next.starts_with("dev_info!(\"{line}\");"), "{rx}: the line in developer mode only");
+        }
+        assert!(!network.contains("* 0.9 + dynamic * 0.1"), "no second copy of the step");
+    }
+
+    /// The line comes every ten seconds, counts what happened, and starts over.
+    #[test]
+    fn the_calibration_line_counts_ten_seconds() {
+        let start = Instant::now();
+        let mut watch = CalWatch::new("RX1");
+        for i in 0..99u64 {
+            let step = match i % 3 {
+                0 => CalStep::HeldForSignal,
+                1 => CalStep::WaitingAfterSignal,
+                _ => CalStep::Learned,
+            };
+            let line = watch.note(step, Some(i as f32 / 10.0), -97.0, Some(-95.0), -11.0, -10.0, start + Duration::from_millis(i * 100));
+            assert!(line.is_none(), "tick {i}");
+        }
+        let line = watch.note(CalStep::NoReading, None, -97.0, Some(-95.0), -11.5, -10.0, start + Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            line,
+            concat!(
+                "Spectrum RX1 calibration against the S-meter (10 s): learned 33, held for a signal 33, ",
+                "waiting after a signal 33, no reading 1, on the air 0; passband over the floor 0.0..9.8 dB (held from 6); ",
+                "offset -11.5..-11.0 dB (static -10.0); now S-meter -97.0 dBm, passband -95.0 dBm raw"
+            )
+        );
+        // Second window: counted afresh.
+        let later = start + Duration::from_secs(11);
+        assert!(watch.note(CalStep::Learned, Some(1.0), -97.0, Some(-95.0), -11.0, -10.0, later).is_none());
+        let line = watch.note(CalStep::Learned, Some(1.0), -97.0, Some(-95.0), -11.0, -10.0, later + Duration::from_secs(10)).unwrap();
+        assert!(line.contains("learned 2, held for a signal 0, waiting after a signal 0, no reading 0, on the air 0"), "{line}");
+        // On the air: counted into the next line, without one of its own; a
+        // tick without a passband reading shows as "-".
+        let third = later + Duration::from_secs(21);
+        assert!(watch.note(CalStep::Learned, Some(1.0), -97.0, Some(-95.0), -11.0, -10.0, third).is_none());
+        for _ in 0..80 {
+            watch.note_on_the_air();
+        }
+        let line = watch.note(CalStep::NoReading, None, -97.0, None, -11.0, -10.0, third + Duration::from_secs(10)).unwrap();
+        assert!(line.contains("no reading 1, on the air 80;"), "{line}");
+        assert!(line.ends_with("passband - dBm raw"), "{line}");
+        // The next window counts the air afresh.
+        let fourth = third + Duration::from_secs(11);
+        assert!(watch.note(CalStep::Learned, Some(1.0), -97.0, Some(-95.0), -11.0, -10.0, fourth).is_none());
+        let line = watch.note(CalStep::Learned, Some(1.0), -97.0, Some(-95.0), -11.0, -10.0, fourth + Duration::from_secs(10)).unwrap();
+        assert!(line.contains("no reading 0, on the air 0;"), "{line}");
     }
 }

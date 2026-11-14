@@ -19,6 +19,7 @@ mod power_cap;
 mod ptt;
 mod rf2k;
 mod serial_link;
+mod serial_ports;
 mod session;
 mod single_instance;
 #[cfg(test)]
@@ -39,6 +40,7 @@ mod pause_trim;
 mod tci_commands;
 mod tracked_socket;
 mod tci_parser;
+mod tci_audio_rate;
 mod tuner;
 mod yaesu;
 mod ultrabeam;
@@ -245,8 +247,14 @@ impl Log for DevGate {
     }
 }
 
+/// The log filter when `RUST_LOG` is not set, for both the command line and the
+/// window. `zbus` and `tracing` come with the desktop layer on Linux and log
+/// lines of kilobytes at info; their warnings and errors still come through.
+const LOG_DEFAULT_FILTER: &str = "info,zbus=warn,tracing=warn";
+
 /// A second settings window on a PC that already has a server open (builds
-/// 14-15): said in a box in the language of the settings, and code 2 like the
+/// 14-15): said in a box in the language of the settings (elsewhere on the
+/// terminal, in English like the log), and code 2 like the
 /// command-line refusal, so a starter that reads the code sees a refusal. No
 /// logger is set yet and the log file is not opened fresh: the running server's
 /// log gets one appended line, nothing more.
@@ -264,7 +272,19 @@ fn refuse_second_window() -> ! {
         let msg = HSTRING::from(rust_i18n::t!("srv_already_running").to_string());
         MessageBoxW(None, PCWSTR(msg.as_ptr()), w!("ThetisLink Server"), MB_OK | MB_ICONINFORMATION);
     }
+    // No box elsewhere: the terminal the window was started from says it.
+    #[cfg(not(windows))]
+    eprintln!("Not started: {}", single_instance::REFUSAL);
     std::process::exit(2);
+}
+
+/// A start that had to wait for the previous server to let go says so: the
+/// pause is seconds at most, and otherwise nothing explains it.
+fn log_claim_wait(claim: &single_instance::Claim) {
+    let waited = claim.waited();
+    if !waited.is_zero() {
+        log::info!("Waited {} ms for the previous server on this PC to let go", waited.as_millis());
+    }
 }
 
 /// Hide the console window in GUI mode (Windows only)
@@ -431,7 +451,7 @@ mod relay_after_port_tests {
     fn the_window_claims_before_it_opens_its_log_fresh() {
         let src = include_str!("main.rs");
         let gui = &src[src.find(&["// GUI mode - ", "dual logger"].concat()).expect("the GUI branch")..];
-        let claim = gui.find(&["single_instance::", "claim("].concat()).expect("the claim");
+        let claim = gui.find(&["single_instance::", "claim_patiently("].concat()).expect("the claim");
         let fresh = gui.find(&["open_log_", "fresh(&log_path)"].concat()).expect("the fresh log");
         assert!(claim < fresh, "the claim must come before the log file is opened fresh");
     }
@@ -660,13 +680,15 @@ fn main() -> Result<()> {
     if has_cli_args {
         // CLI mode - env_logger, no GUI. The developer mode is never on here
         // (no settings screen), so its lines stay out (build 294).
-        let env_log = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
+        let env_log = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(LOG_DEFAULT_FILTER)).build();
         log::set_max_level(env_log.filter());
         log::set_boxed_logger(Box::new(DevGate(env_log))).unwrap();
 
         // One server per PC (build 14), before anything opens a port or signs
         // in at the relay. Held until this branch ends, i.e. for the server's life.
-        let _instance = match single_instance::claim(&single_instance::name()) {
+        let _instance = match single_instance::claim_patiently(
+            &single_instance::name(), single_instance::PATIENCE, single_instance::PATIENCE_STEP)
+        {
             Some(claim) => claim,
             None => {
                 let why = single_instance::REFUSAL;
@@ -675,6 +697,8 @@ fn main() -> Result<()> {
                 std::process::exit(2);
             }
         };
+        log_claim_wait(&_instance);
+        crate::serial_ports::log_ports(&crate::serial_ports::names());
 
         let defaults = ServerConfig::default();
         // What a command-line start takes from the saved settings: the
@@ -837,7 +861,7 @@ fn main() -> Result<()> {
         let log_buffer: LogBuffer = Arc::new(StdMutex::new(VecDeque::new()));
 
         let env_log = env_logger::Builder::from_env(
-            env_logger::Env::default().default_filter_or("info"),
+            env_logger::Env::default().default_filter_or(LOG_DEFAULT_FILTER),
         )
         .build();
         let max_level = env_log.filter();
@@ -846,7 +870,9 @@ fn main() -> Result<()> {
         // fresh: a refused second start wiped the running server's log down to
         // its own refusal (a test of build 14). Held until this branch
         // ends, i.e. until the window closes.
-        let _instance = match single_instance::claim(&single_instance::name()) {
+        let _instance = match single_instance::claim_patiently(
+            &single_instance::name(), single_instance::PATIENCE, single_instance::PATIENCE_STEP)
+        {
             Some(claim) => claim,
             None => refuse_second_window(),
         };
@@ -878,6 +904,7 @@ fn main() -> Result<()> {
         if let Some(why) = _instance.unavailable() {
             log::warn!("single-instance check unavailable ({why}); started without it");
         }
+        log_claim_wait(&_instance);
 
         #[cfg(windows)]
         hide_console();

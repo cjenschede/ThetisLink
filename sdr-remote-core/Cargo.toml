@@ -21,6 +21,15 @@ rand = "0.8"
 totp-lite = "2.0"
 base32 = "0.5"
 
+# `audio_stream`: a cpal stream in the device's own sample format, for the
+# server and the desktop client. Same crate the two already pull in, so no new
+# crate enters the workspace or the SBOM; behind a feature, so the Android build
+# of this crate does not compile it.
+cpal = { workspace = true, optional = true }
+
+[features]
+audio-stream = ["dep:cpal"]
+
 # `oslang`: the OS display language for a first start (GetUserDefaultUILanguage).
 # Same crate + version the server and client already pull in, so no new crate
 # enters the workspace or the SBOM. Target-gated, so the Android build of this

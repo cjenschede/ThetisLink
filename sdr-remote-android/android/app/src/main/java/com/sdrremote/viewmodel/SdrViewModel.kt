@@ -565,6 +565,10 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
             while (isActive) {
                 delay(33) // ~30fps
                 try {
+                    // The TUNE button's waits and its PA run here, for as long
+                    // as the app does, not only while its screen is shown.
+                    bridge?.thetisTuneTick()
+                    val tune = bridge?.thetisTuneButton()
                     val s = bridge?.getState() ?: continue
                     // On disconnect, reset the subscription state (the server forgets subs);
                     // on (re)connect, subscribe again according to the window/active state.
@@ -692,6 +696,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         diversityAutonullResult = s.diversityAutonullResult.toInt(),
                         driveLevel = s.driveLevel.toInt(),
                         rxAfGain = s.rxAfGain.toInt(),
+                        rxVolumeSynced = s.rxVolumeSynced,
                         agcEnabled = s.agcEnabled,
                         otherTx = s.otherTx,
                         meterTx = s.smeterTx,
@@ -701,6 +706,9 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
                         filterHighHz = s.filterHighHz,
                         thetisConfigured = s.thetisConfigured,
                         thetisStarting = s.thetisStarting,
+                        thetisTuneShown = tune?.shown ?: false,
+                        thetisTuneWaiting = tune?.waiting ?: false,
+                        thetisTuneCanPress = tune?.canPress ?: false,
                         thetisNotRunning = s.thetisNotRunning,
                         txProfileNames = s.txProfileNames,
                         spectrumBins = s.spectrumBins,
@@ -1769,6 +1777,7 @@ class SdrViewModel(application: Application) : AndroidViewModel(application) {
     fun speDriveDown() { bridge?.speDriveDown() }
     fun speDriveUp() { bridge?.speDriveUp() }
     fun rf2kOperate(on: Boolean) { bridge?.rf2kOperate(on) }
+    fun thetisTunePress() { bridge?.thetisTunePress() }
     fun rf2kTune() { bridge?.rf2kTune() }
     fun rf2kAnt1() { bridge?.rf2kAnt1() }
     fun rf2kAnt2() { bridge?.rf2kAnt2() }

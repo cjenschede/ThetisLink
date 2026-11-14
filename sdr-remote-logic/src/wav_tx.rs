@@ -52,7 +52,7 @@ impl WavToRadio {
 /// For the log line: "8000 Hz to 16000 Hz, up with sinc 128, cutoff 0.95".
 impl fmt::Display for WavToRadio {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} Hz to {} Hz, {}", self.from_hz, self.to_hz, self.resampler)
+        f.write_str(&self.resampler.built())
     }
 }
 

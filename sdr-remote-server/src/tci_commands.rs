@@ -92,15 +92,25 @@ impl TciConnection {
         self.send("vfo_swap_ex;").await;
     }
 
-    pub async fn set_rx2_af_gain(&mut self, level: u8) {
+    /// A client's volume for RX1 (`receiver` 0) or RX2 (1); `who` asked for it.
+    pub async fn set_rx_af_gain(&mut self, receiver: u32, level: u8, who: String) {
         // rx_volume supported since Thetis v2.10.3.13.
-        // Scale: 0..100 % -> −60..0 dB (matches RxVolume parser/handler in tci.rs).
+        // On Thetis's own scale, the same one the report comes back on.
         let level = level.min(100);
-        let db = ((level as i32 - 100) * 60) / 100;
-        let cmd = format!("rx_volume:1,0,{};", db);
+        let db = crate::tci::volume_to_db(level);
+        let cmd = format!("rx_volume:{},0,{:.3};", receiver, db);
+        // `send` drops a command while Thetis is gone, and one it could not
+        // hand on ends the connection there; either way nothing was asked of
+        // Thetis, so the line has nothing to say. Read after the send.
         self.send(&cmd).await;
+        let sent = self.is_connected();
+        if sent {
+            if let Some(trail) = self.volume_trail.get_mut(receiver as usize) {
+                trail.asked(level, who, Instant::now());
+            }
+        }
         // No optimistic state update - Thetis echoes rx_volume back and the
-        // RxVolume notification handler updates `rx2_af_gain`.
+        // RxVolume notification handler updates `rx_af_gain` / `rx2_af_gain`.
     }
 
     pub async fn set_rx2_nr(&mut self, level: u8) {
@@ -347,9 +357,6 @@ impl TciConnection {
         let cmd = format!("tune:0,{};", if on { "true" } else { "false" });
         debug!("TCI: TUNE {}", if on { "ON" } else { "OFF" });
         self.send(&cmd).await;
-        // Through the same rule as the notification, so receiver 1 is not
-        // pushed aside by a TUNE OFF the server sent for receiver 0.
-        self.tune_from_us(0, on);
     }
 
     pub async fn set_tune_drive(&mut self, level: u8) {

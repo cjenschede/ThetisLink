@@ -88,6 +88,8 @@ pub struct TciConnection {
     /// As `asked_mode_a`, for VFO B.
     pub asked_mode_b: Option<(u8, Instant)>,
     pub rx2_af_gain: u8,
+    /// What RX1 and RX2's volume did, for one log line once it stands still.
+    pub(crate) volume_trail: [VolumeTrail; 2],
     pub smeter_rx2_window: VecDeque<f32>,
     /// RX2 Avg source dBm (mirror of smeter_direct_dbm for RX1).
     pub smeter_rx2_direct_dbm: Option<f32>,
@@ -172,8 +174,16 @@ pub struct TciConnection {
     /// reader asks "is Thetis putting out a carrier", not "on which receiver"
     /// (build 62 kept only receiver 0).
     tune_active: bool,
-    /// Per receiver, so a TUNE OFF on one does not clear a TUNE ON on the other.
+    /// Per receiver, so a TUNE OFF on one does not clear a TUNE ON on the other:
+    /// what Thetis reports.
     pub(crate) tune_rx: [bool; 2],
+    /// Per receiver, what we sent (`tune_from_us`). Kept apart from what Thetis
+    /// reports, so our own TUNE OFF does not end a TUNE Thetis still reports;
+    /// a TUNE OFF Thetis reports ends ours too. Not the same as `we_tune`: this
+    /// one is what is on the air from us and goes with the link
+    /// (`handle_disconnect`); `we_tune` is what we want and outlives the link,
+    /// for the safety at the reconnect.
+    tune_ours: [bool; 2],
     // Tune drive level (TCI: tune_drive, 0-100)
     pub tune_drive: u8,
     // Monitor volume in dB (TCI: mon_volume, typically -40..0)
@@ -324,11 +334,19 @@ pub struct TciConnection {
     we_tune: TuneIntent,
     /// Shared "current Amplitec-A position is RX-only" flag (clone of the
     /// flag in `PttController::tx_blocked`). Updated by the broadcast-loop in
-    /// `network.rs`; used in the TRX-notification handler to
-    /// immediately stop Thetis-direct PTT (spacebar, hardware-PTT)
-    /// - the server-initiated PTT paths do not catch that (they have their
-    /// own preventive gate). Default: dummy Arc that is always `false`.
+    /// `network.rs`; used in `send`, which refuses every command that keys
+    /// the transmitter (`keys_the_transmitter`), and in the TRX-notification
+    /// handler to immediately stop Thetis-direct PTT (spacebar, hardware-PTT).
+    /// Default: dummy Arc that is always `false`.
     tx_blocked: Arc<AtomicBool>,
+    /// The Amplitec-A position is RX-only (or a switch to one waits), apart from
+    /// why `tx_blocked` is shut: only this answers a TX keyed at the radio PC
+    /// and refuses lifting the radio's own receive-only. After a safety loss
+    /// the gate stays shut for our own paths, and the operator at the radio
+    /// keeps transmitting on an antenna that may.
+    rx_only_position: Arc<AtomicBool>,
+    /// Per receiver, the TRX Thetis reports; `thetis_tx_active` is either.
+    thetis_trx_rx: [bool; 2],
 }
 
 /// Parsed TCI notifications from the reader task
@@ -389,6 +407,308 @@ pub fn mode_for_filter(asked: Option<(u8, Instant)>, reported: u8, now: Instant)
     match asked {
         Some((mode, at)) if now.duration_since(at) < ASKED_MODE_HOLD => mode,
         _ => reported,
+    }
+}
+
+/// How long a receiver's volume must stand still before its line is logged: a
+/// drag on a slider sends a value per step, the line is about where it ended.
+pub const VOLUME_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// A receiver's volume as the dB TCI carries, on Thetis's own scale: the
+/// percent is Thetis's 0..100 setting, a linear gain, sent as 20*log10 of it,
+/// and 0 is -60 dB (`dbToAudioGain`/`audioGainToDb` in Thetis's TCIServer.cs).
+///
+/// A quarter step above the percent: Thetis keeps the integer part of the gain
+/// it computes, and a value exactly on the step can land a hair under it and
+/// lose one. A quarter step stays inside the step there, and an SDR that keeps
+/// the gain as it is reports back a value that rounds to the same percent.
+pub(crate) fn volume_to_db(pct: u8) -> f32 {
+    match pct {
+        0 => -60.0,
+        p if p >= 100 => 0.0,
+        p => 20.0 * ((p as f32 + 0.25) / 100.0).log10(),
+    }
+}
+
+/// The percent for a volume TCI reports, the way back of [`volume_to_db`]:
+/// -60 dB and below is 0 (an SDR may say -100 for silence), rounded rather
+/// than cut, so a report two decimals wide gives the step it came from.
+pub(crate) fn volume_from_db(db: f32) -> u8 {
+    if !(db > -60.0) {
+        return 0;
+    }
+    (10f32.powf(db / 20.0) * 100.0).round().clamp(0.0, 100.0) as u8
+}
+
+/// What one receiver's volume did since its last line: the value a client
+/// asked for and the value Thetis reported. One line once neither changed for
+/// `VOLUME_SETTLE`; the value Thetis reports at connect gives the first.
+#[derive(Debug, Default)]
+pub(crate) struct VolumeTrail {
+    asked: Option<(u8, String)>,
+    reported: Option<(f32, u8)>,
+    changed: Option<Instant>,
+}
+
+impl VolumeTrail {
+    pub(crate) fn asked(&mut self, pct: u8, who: String, now: Instant) {
+        self.asked = Some((pct, who));
+        self.changed = Some(now);
+    }
+
+    pub(crate) fn reported(&mut self, db: f32, pct: u8, now: Instant) {
+        self.reported = Some((db, pct));
+        self.changed = Some(now);
+    }
+
+    /// The line, once per change, after it stood still for `VOLUME_SETTLE`.
+    pub(crate) fn settled(&mut self, now: Instant) -> Option<String> {
+        let changed = self.changed?;
+        if now.duration_since(changed) < VOLUME_SETTLE {
+            return None;
+        }
+        self.changed = None;
+        let thetis = match self.reported {
+            Some((db, pct)) => format!("Thetis reports {:.1} dB ({} %)", db, pct),
+            None => "Thetis has reported nothing yet".to_string(),
+        };
+        Some(match self.asked.take() {
+            Some((pct, who)) => format!("{} % asked by {}; {}", pct, who, thetis),
+            None => thetis,
+        })
+    }
+}
+
+#[cfg(test)]
+mod volume_trail_tests {
+    use super::*;
+
+    /// Every percent reaches Thetis as itself and comes back as itself, on
+    /// Thetis's own arithmetic (the integer part of the gain, and its report
+    /// two decimals wide), and on an SDR that keeps the gain as it is.
+    #[test]
+    fn every_volume_step_goes_there_and_back_as_itself() {
+        let wire = |pct: u8| -> f64 { format!("{:.3}", volume_to_db(pct)).parse().unwrap() };
+        // TCIServer.cs: dbToAudioGain, the (int) of it, and audioGainToDb.
+        let thetis_takes = |db: f64| -> i32 {
+            let gain = if db <= -60.0 { 0.0 } else if db >= 0.0 { 1.0 } else { 10f64.powf(db / 20.0) };
+            (gain * 100.0) as i32
+        };
+        let thetis_says = |n: i32| -> f32 {
+            let gain = n as f64 / 100.0;
+            let db = if gain <= 0.0 { -60.0 } else if gain >= 1.0 { 0.0 } else { 20.0 * gain.log10() };
+            format!("{:.2}", db).parse().unwrap()
+        };
+        let keeps_gain_says = |db: f64| -> f32 {
+            let gain = 10f64.powf(db / 20.0);
+            let db = if gain <= 0.0001 { -100.0 } else { 20.0 * gain.log10() };
+            format!("{:.2}", db).parse().unwrap()
+        };
+        for pass in 0..2 {
+            for pct in 0..=100u8 {
+                let n = thetis_takes(wire(pct));
+                assert_eq!(n, pct as i32, "pass {pass}: {pct} % is Thetis's {pct}");
+                assert_eq!(volume_from_db(thetis_says(n)), pct, "pass {pass}: and Thetis's {pct} is {pct} %");
+                assert_eq!(volume_from_db(keeps_gain_says(wire(pct))), pct, "pass {pass}: {pct} % kept as a gain");
+            }
+        }
+        assert_eq!(volume_from_db(-100.0), 0, "silence said deeper than -60");
+        assert_eq!(volume_from_db(f32::NAN), 0);
+        assert_eq!(volume_from_db(3.0), 100, "above unity is the top");
+        assert_eq!(volume_to_db(200), 0.0);
+        assert_eq!(volume_to_db(0), -60.0, "0 % is the floor Thetis and an SDR read as off");
+    }
+
+    /// A volume Thetis reports lands on its own receiver, on Thetis's scale,
+    /// with its line; the sub receiver's slider (channel 1) is not RX1's.
+    /// Twice, on the same connection.
+    #[test]
+    fn a_reported_volume_lands_on_its_own_receiver() {
+        use crate::tci_parser::TciNotification;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let mut t = TciConnection::new(None);
+        let later = || Instant::now() + VOLUME_SETTLE * 2;
+        for pass in 0..2 {
+            rt.block_on(t.handle_notification(TciNotification::RxVolume { receiver: 0, _sub_rx: 0, db: -6.02 }));
+            rt.block_on(t.handle_notification(TciNotification::RxVolume { receiver: 1, _sub_rx: 0, db: -3.10 }));
+            assert_eq!((t.rx_af_gain, t.rx2_af_gain), (50, 70), "pass {pass}: Thetis's 50 and 70, each on its own");
+            assert_eq!(t.volume_trail[0].settled(later()).as_deref(), Some("Thetis reports -6.0 dB (50 %)"), "pass {pass}");
+            assert_eq!(t.volume_trail[1].settled(later()).as_deref(), Some("Thetis reports -3.1 dB (70 %)"), "pass {pass}");
+            rt.block_on(t.handle_notification(TciNotification::RxVolume { receiver: 0, _sub_rx: 1, db: 0.0 }));
+            rt.block_on(t.handle_notification(TciNotification::RxVolume { receiver: 0, _sub_rx: 1, db: -60.0 }));
+            assert_eq!(t.rx_af_gain, 50, "pass {pass}: the sub receiver's slider is not RX1's");
+            assert_eq!(t.volume_trail[0].settled(later()), None, "pass {pass}: nor its line");
+            t.handle_disconnect();
+        }
+    }
+
+    /// One line per change, once it stands still: a drag is one line, the
+    /// second drag another, and a value set at the radio says so.
+    #[test]
+    fn a_volume_is_logged_once_it_stands_still() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        let mut trail = VolumeTrail::default();
+        assert_eq!(trail.settled(ms(5_000)), None, "nothing happened");
+        for pass in 0..2u64 {
+            let at = pass * 10_000;
+            for step in 0..5u64 {
+                trail.asked(50 + step as u8, "client".into(), ms(at + step * 100));
+                trail.reported(-30.0 + step as f32, 50 + step as u8, ms(at + step * 100 + 50));
+            }
+            assert_eq!(trail.settled(ms(at + 900)), None, "pass {pass}: still moving");
+            assert_eq!(
+                trail.settled(ms(at + 1_450)).as_deref(),
+                Some("54 % asked by client; Thetis reports -26.0 dB (54 %)"),
+                "pass {pass}: where the drag ended"
+            );
+            assert_eq!(trail.settled(ms(at + 5_000)), None, "pass {pass}: once");
+        }
+        trail.reported(-12.0, 80, ms(30_000));
+        assert_eq!(trail.settled(ms(31_000)).as_deref(), Some("Thetis reports -12.0 dB (80 %)"), "set at the radio");
+        let mut asked_only = VolumeTrail::default();
+        asked_only.asked(40, "client".into(), ms(0));
+        assert_eq!(asked_only.settled(ms(1_000)).as_deref(), Some("40 % asked by client; Thetis has reported nothing yet"));
+    }
+
+    /// Both receivers' volume go through one setter, which notes who asked,
+    /// and the poll logs what stood still.
+    #[test]
+    fn both_receivers_volume_goes_through_the_one_setter() {
+        let code = |s: &str| sdr_remote_core::source_text::production_code(s).to_string();
+        let net = code(include_str!("network.rs"));
+        assert_eq!(net.matches("ptt.set_rx_af_gain(0, val as u8, addr.to_string()).await;").count(), 1);
+        assert_eq!(net.matches("ptt.set_rx_af_gain(1, val as u8, addr.to_string()).await;").count(), 1);
+        let ptt = code(include_str!("ptt.rs"));
+        assert_eq!(ptt.matches("self.tci.set_rx_af_gain(receiver, level, who).await").count(), 1, "the receiver survives the pass-through");
+        assert!(!net.contains("rx_volume:"), "no volume sent around the setter");
+        let cmds = code(include_str!("tci_commands.rs"));
+        assert_eq!(cmds.matches("rx_volume:").count(), 1);
+        assert_eq!(cmds.matches("trail.asked(level, who, Instant::now());").count(), 1);
+        let tci = code(include_str!("tci.rs"));
+        assert_eq!(tci.matches("trail.reported(db, pct, Instant::now());").count(), 1);
+        assert_eq!(tci.matches("if let Some(line) = trail.settled(now) {").count(), 1);
+        // The setter's own body: the receiver reaches the wire and its own
+        // trail, on the one scale, and only what went out counts as asked.
+        let setter = &cmds[cmds.find("pub async fn set_rx_af_gain(").unwrap()..];
+        let setter = &setter[..setter.find("\n    pub ").unwrap()];
+        assert_eq!(setter.matches("let cmd = format!(\"rx_volume:{},0,{:.3};\", receiver, db);").count(), 1, "the receiver reaches the wire");
+        assert_eq!(setter.matches("self.send(&cmd).await;").count(), 1, "and it is sent");
+        assert_eq!(setter.matches("let db = crate::tci::volume_to_db(level);").count(), 1, "on Thetis's scale");
+        assert_eq!(tci.matches("let pct = volume_from_db(db);").count(), 1, "and back on the same one");
+        assert_eq!(setter.matches("self.volume_trail.get_mut(receiver as usize)").count(), 1, "the asker's own trail");
+        assert!(setter.find("self.send(&cmd).await;").unwrap() < setter.find("let sent = self.is_connected();").unwrap(),
+            "connected is read after send: a send that failed is not asked");
+        assert!(setter.find("if sent {").unwrap() < setter.find("trail.asked(").unwrap(), "asked only once sent");
+        assert_eq!(tci.matches("self.volume_trail.get_mut(receiver as usize)").count(), 1, "the report's own trail");
+        assert_eq!(tci.matches("pub(crate) volume_trail: [VolumeTrail; 2],").count(), 1, "one per receiver");
+        assert_eq!(tci.matches("for (rx, trail) in self.volume_trail.iter_mut().enumerate() {").count(), 1, "both of them");
+        assert_eq!(tci.matches("info!(\"RX{} volume: {}\", rx + 1, line);").count(), 1, "the line it logs");
+        // Both receivers asked at connect, and the trail goes with its Thetis.
+        assert_eq!(tci.matches("self.send(\"rx_volume:0,0;\").await;").count(), 1);
+        assert_eq!(tci.matches("        self.send(\"rx_anf_enable:0;\").await;
+        self.send(\"rx_volume:0,0;\").await;
+        tokio::time::sleep(delay).await;
+").count(),
+            1, "asked plainly in the RX1 batch, nothing around it");
+        assert_eq!(tci.matches("self.send(\"rx_volume:1,0;\").await;").count(), 1);
+        assert_eq!(tci.matches("        self.send(\"rx_nf_enable:1;\").await;\n        self.send(\"rx_volume:1,0;\").await;\n        tokio::time::sleep(delay).await;\n").count(),
+            1, "asked plainly in the RX2 batch, nothing around it");
+        let gone = &tci[tci.find("fn handle_disconnect(&mut self) {").unwrap()..];
+        let gone = &gone[..gone.find("\n    }\n").unwrap()];
+        assert_eq!(gone.matches("self.volume_trail = Default::default();").count(), 1, "cleared with the connection");
+        // And again when the next one comes: a report that came in between is
+        // not this one's. The channel and the flag are set, and cleared, as a pair.
+        let came = &tci[tci.find("pub fn accept_stream(").unwrap()..];
+        let came = &came[..came.find("
+    }
+").unwrap()];
+        assert_eq!(came.matches("self.volume_trail = Default::default();").count(), 1, "cleared for the next one");
+        assert_eq!(came.matches("self.cmd_tx = Some(cmd_tx);").count(), 1);
+        assert_eq!(came.matches("self.connected = true;").count(), 1);
+        assert_eq!(gone.matches("        self.connected = false;
+        self.cmd_tx = None;
+").count(), 1, "gone together");
+    }
+
+    /// What counts as asked, on the connection itself: only a volume that was
+    /// handed on to Thetis, a line left waiting goes with its connection, and
+    /// the poll says what stood still. Twice, on the same connection.
+    #[test]
+    fn only_a_volume_handed_to_thetis_counts_as_asked() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let mut t = TciConnection::new(None);
+        let later = || Instant::now() + VOLUME_SETTLE * 2;
+        for pass in 0..2 {
+            // TCI down: nothing goes out, nothing is asked.
+            t.connected = false;
+            t.cmd_tx = None;
+            rt.block_on(t.set_rx_af_gain(0, 40, "client".into()));
+            assert_eq!(t.volume_trail[0].settled(later()), None, "pass {pass}: down");
+
+            // Connected with an open channel: it goes out and counts.
+            let (tx, mut rx) = mpsc::channel::<String>(16);
+            t.connected = true;
+            t.cmd_tx = Some(tx);
+            rt.block_on(t.set_rx_af_gain(0, 46, "client".into()));
+            assert_eq!(rx.try_recv().ok().as_deref(), Some("rx_volume:0,0,-6.698;"), "pass {pass}");
+            assert_eq!(t.volume_trail[0].settled(later()).as_deref(),
+                Some("46 % asked by client; Thetis has reported nothing yet"), "pass {pass}: open");
+            // And RX2, on its own trail.
+            rt.block_on(t.set_rx_af_gain(1, 70, "client".into()));
+            assert_eq!(rx.try_recv().ok().as_deref(), Some("rx_volume:1,0,-3.067;"), "pass {pass}");
+            assert_eq!(t.volume_trail[1].settled(later()).as_deref(),
+                Some("70 % asked by client; Thetis has reported nothing yet"), "pass {pass}: RX2 open");
+            assert_eq!(t.volume_trail[0].settled(later()), None, "pass {pass}: RX1 untouched");
+
+            // A line still waiting when a send fails goes with the connection
+            // that send ended.
+            rt.block_on(t.set_rx_af_gain(0, 55, "client".into()));
+            drop(rx);
+            rt.block_on(t.set_rx_af_gain(1, 20, "client".into()));
+            assert!(!t.is_connected(), "pass {pass}: the failed send disconnected");
+            assert_eq!(t.volume_trail[0].settled(later()), None, "pass {pass}: the waiting line went too");
+
+            // The writer is gone while `connected` still says yes: the send
+            // ends the connection, and nothing counts as asked.
+            let (tx, rx) = mpsc::channel::<String>(16);
+            drop(rx);
+            t.connected = true;
+            t.cmd_tx = Some(tx);
+            rt.block_on(t.set_rx_af_gain(0, 60, "client".into()));
+            assert!(!t.is_connected(), "pass {pass}: the failed send disconnected");
+            assert_eq!(t.volume_trail[0].settled(later()), None, "pass {pass}: writer gone");
+
+            // The channel full: the same.
+            let (tx, _rx) = mpsc::channel::<String>(1);
+            tx.try_send("filler".into()).unwrap();
+            t.connected = true;
+            t.cmd_tx = Some(tx);
+            rt.block_on(t.set_rx_af_gain(1, 70, "client".into()));
+            assert!(!t.is_connected(), "pass {pass}: full");
+            assert_eq!(t.volume_trail[1].settled(later()), None, "pass {pass}: channel full");
+
+            // A line still waiting when Thetis goes is not the next one's.
+            let (tx, _rx) = mpsc::channel::<String>(16);
+            t.connected = true;
+            t.cmd_tx = Some(tx);
+            rt.block_on(t.set_rx_af_gain(0, 50, "client".into()));
+            // What Thetis said goes too: the next pass opens on "nothing yet".
+            t.volume_trail[0].reported(-6.0, 50, Instant::now());
+            t.volume_trail[1].reported(-3.0, 70, Instant::now());
+            t.handle_disconnect();
+            assert_eq!(t.volume_trail[0].settled(later()), None, "pass {pass}: gone with its Thetis");
+            assert_eq!(t.volume_trail[1].settled(later()), None, "pass {pass}: RX2's too");
+
+            // The poll says a line that stood still, and then it is said.
+            let (tx, _rx) = mpsc::channel::<String>(16);
+            t.connected = true;
+            t.cmd_tx = Some(tx);
+            t.volume_trail[1].asked(30, "client".into(), Instant::now() - VOLUME_SETTLE * 2);
+            rt.block_on(t.poll_and_parse());
+            assert_eq!(t.volume_trail[1].settled(later()), None, "pass {pass}: the poll said it");
+            t.handle_disconnect();
+        }
     }
 }
 
@@ -496,6 +816,8 @@ mod sensors_ex_tests {
     fn thetis_tx_keeps_its_receiver_and_connections_are_counted() {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         let mut t = TciConnection::new(None);
+        // Reports arrive on a link: the poll hands them on only while it stands.
+        let _wire = t.set_link_for_test(true, 0);
         rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 1, active: true }));
         assert!(t.thetis_tx_active);
         assert_eq!(t.thetis_tx_receiver, 1);
@@ -509,6 +831,8 @@ mod sensors_ex_tests {
         // loop's stop for a TUNE there goes to the same receiver.
         let blocked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         t.set_tx_blocked_handle(blocked);
+        // The TRX arm answers on the position (build 31), not on the gate.
+        t.set_rx_only_position_handle(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)));
         rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 1, active: true }));
         rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 1, active: true }));
         assert_eq!(rx_only_stop_commands(t.thetis_tx_receiver, t.tune_rx)[0], "TRX:1,false;");
@@ -532,7 +856,7 @@ mod sensors_ex_tests {
         assert_eq!(rx_only_stop_commands(0, [true, false])[1], "tune:0,false;");
         // And each one is sent, from where the loop calls it.
         assert_eq!(
-            include_str!("tci.rs").matches("for cmd in rx_only_stop_commands(self.thetis_tx_receiver, self.tune_rx) {\n            self.send(&cmd).await;").count(),
+            include_str!("tci.rs").matches("for cmd in rx_only_stop_commands(self.thetis_tx_receiver, self.tune_any_side()) {\n            self.send(&cmd).await;").count(),
             1
         );
         let src = include_str!("tci.rs");
@@ -791,6 +1115,11 @@ impl TciConnection {
         self.tx_blocked = flag;
     }
 
+    /// The shared "the position is RX-only" flag (`PttController`).
+    pub fn set_rx_only_position_handle(&mut self, flag: Arc<AtomicBool>) {
+        self.rx_only_position = flag;
+    }
+
     pub fn new(addr: Option<&str>) -> Self {
         // Cold-boot defensiveness: on Windows, Instant::now() reflects QPC ticks
         // since system boot. If the server starts within ~60s of cold-boot, the
@@ -837,6 +1166,7 @@ impl TciConnection {
             vfo_b_mode: 0,
             asked_mode_b: None,
             rx2_af_gain: 100,
+            volume_trail: Default::default(),
             smeter_rx2_window: VecDeque::with_capacity(4),
             smeter_rx2_direct_dbm: None,
             smeter_rx2_sig_dbm: None,
@@ -892,6 +1222,7 @@ impl TciConnection {
             rx_balance: 0,
             tune_active: false,
             tune_rx: [false; 2],
+            tune_ours: [false; 2],
             tune_drive: 0,
             mon_volume: -40,
             meter_cal_offset: [0.0; 2],
@@ -949,6 +1280,8 @@ impl TciConnection {
             connections: 0,
             answers_run_cat_ex: false,
             tx_blocked: Arc::new(AtomicBool::new(false)),
+            rx_only_position: Arc::new(AtomicBool::new(false)),
+            thetis_trx_rx: [false; 2],
         }
     }
 
@@ -996,6 +1329,9 @@ impl TciConnection {
         self.iq_rx2_rx = Some(iq_rx2_rx);
         self.connected = true;
         self.connections += 1;
+        // A report that came in after the last connection ended is not this
+        // one's: its own report at connect gives the first line.
+        self.volume_trail = Default::default();
 
         tokio::spawn(tci_writer_task(ws_write, cmd_rx, bin_rx));
 
@@ -1024,31 +1360,64 @@ impl TciConnection {
 
     /// Send a TCI text command (e.g. "VFO:0,0,14200000;")
     pub async fn send(&mut self, cmd: &str) {
-        if is_trx_off(cmd) {
+        // The RX-only gate, for every command to the radio software whichever
+        // path sent it: on a blocked position nothing that keys the
+        // transmitter or lifts the radio's own receive-only goes out.
+        if self.tx_blocked.load(Ordering::Relaxed) && keys_the_transmitter(cmd) {
+            warn!("TCI {} refused: {}", cmd.trim_end_matches(';'), crate::ptt::TX_BLOCKED_WHY);
+            return;
+        }
+        if self.rx_only_position.load(Ordering::Relaxed) && lifts_receive_only(cmd) {
+            warn!("TCI {} refused: the Amplitec position is RX-only", cmd.trim_end_matches(';'));
+            return;
+        }
+        // The bookkeeping below reads every command of a frame, as the gate does.
+        let parts = || cmd.split(';').map(str::trim).filter(|p| !p.is_empty());
+        if parts().any(is_trx_off) {
             // Before it goes out: the reader drops what waits (build 196).
             self.tx_off_count.fetch_add(1, Ordering::Relaxed);
         }
-        // Our own TUNE, whichever path sent it - and before the connection is
-        // checked: a TUNE off said while TCI is gone is still what we want, and
-        // left out it let a carrier stand after the reconnect.
-        self.we_tune.sent(cmd);
+        // Our own TUNE off, whichever path sent it - and before the connection
+        // is checked: a TUNE off said while TCI is gone is still what we want,
+        // and left out it let a carrier stand after the reconnect.
+        for part in parts() {
+            if let Some((_, false)) = tune_command(part) {
+                self.we_tune.sent(part);
+            }
+        }
         if !self.connected {
             return; // Not connected, skip (connection managed by background task)
         }
-        if let Some(ref tx) = self.cmd_tx {
-            // Log non-trivial commands (skip high-frequency sensor/audio cmds
-            // and the 2-second ZZFI/ZZFJ filter-preset polls which would
-            // otherwise dominate the log).
-            if !cmd.starts_with("AUDIO") && !cmd.starts_with("IQ")
-                && !cmd.starts_with("RX_SENSORS") && !cmd.starts_with("TX_SENSORS")
-                && !cmd.starts_with("VOLUME:") && !cmd.starts_with("tx_profiles")
-                && !cmd.starts_with("run_cat_ex:ZZFI") && !cmd.starts_with("run_cat_ex:ZZFJ")
-                && !cmd.starts_with("dds:") {
-                debug!("TCI send: {}", cmd.trim_end_matches(';'));
-            }
-            if tx.try_send(cmd.to_string()).is_err() {
-                warn!("TCI cmd channel full or closed, disconnecting");
-                self.handle_disconnect();
+        let Some(ref tx) = self.cmd_tx else {
+            return;
+        };
+        // Log non-trivial commands (skip high-frequency sensor/audio cmds
+        // and the 2-second ZZFI/ZZFJ filter-preset polls which would
+        // otherwise dominate the log).
+        if !cmd.starts_with("AUDIO") && !cmd.starts_with("IQ")
+            && !cmd.starts_with("RX_SENSORS") && !cmd.starts_with("TX_SENSORS")
+            && !cmd.starts_with("VOLUME:") && !cmd.starts_with("tx_profiles")
+            && !cmd.starts_with("run_cat_ex:ZZFI") && !cmd.starts_with("run_cat_ex:ZZFJ")
+            && !cmd.starts_with("dds:") {
+            debug!("TCI send: {}", cmd.trim_end_matches(';'));
+        }
+        if tx.try_send(cmd.to_string()).is_err() {
+            warn!("TCI cmd channel full or closed, disconnecting");
+            self.handle_disconnect();
+            return;
+        }
+        // Our own TUNE is on the air from the moment it goes out, whichever
+        // path sent it (a client, the antenna tuner, the RF2K-S), without
+        // waiting for Thetis to report it. An on counts as ours only once it
+        // was handed on: one said while TCI is gone, or one the writer could
+        // not take, would make a TUNE Thetis reports at the reconnect look
+        // like our own.
+        for part in parts() {
+            if let Some((receiver, on)) = tune_command(part) {
+                if on {
+                    self.we_tune.sent(part);
+                }
+                self.tune_from_us(receiver, on);
             }
         }
     }
@@ -1127,7 +1496,19 @@ impl TciConnection {
             }
         }
         for notif in notifications {
+            // A report that ended the connection (its answer could not be
+            // handed on) ends the drain too: what follows it is of a Thetis
+            // that is gone, and would be written over what the end cleared.
+            if !self.connected {
+                break;
+            }
             self.handle_notification(notif).await;
+        }
+        let now = Instant::now();
+        for (rx, trail) in self.volume_trail.iter_mut().enumerate() {
+            if let Some(line) = trail.settled(now) {
+                info!("RX{} volume: {}", rx + 1, line);
+            }
         }
         // Only if the Disconnected notification in the same drain did not
         // already do it: handle_disconnect() clears `connected`, so this is the
@@ -1379,9 +1760,16 @@ impl TciConnection {
 
     /// Our own Tune on `receiver`, through the same merge as Thetis's
     /// notification, so a TUNE OFF for receiver 0 does not push receiver 1
-    /// aside.
+    /// aside. Called from `send`, for every TUNE that goes out.
     pub(crate) fn tune_from_us(&mut self, receiver: usize, on: bool) {
-        self.tune_active = merge_tune(&mut self.tune_rx, receiver, on);
+        let ours = merge_tune(&mut self.tune_ours, receiver, on);
+        self.tune_active = ours || self.tune_rx.iter().any(|&r| r);
+    }
+
+    /// The receivers with a TUNE on, ours or reported: what the RX-only stop
+    /// switches off.
+    fn tune_any_side(&self) -> [bool; 2] {
+        [self.tune_rx[0] || self.tune_ours[0], self.tune_rx[1] || self.tune_ours[1]]
     }
 
     /// Set what Thetis reports, for a test outside this file.
@@ -1389,6 +1777,26 @@ impl TciConnection {
     pub(crate) fn set_on_the_air_for_test(&mut self, trx: bool, tune: bool) {
         self.thetis_tx_active = trx;
         self.tune_active = tune;
+    }
+
+    /// A command as `send` records it in our TUNE intent, for a test outside
+    /// this file (the link itself is not needed for what is recorded).
+    #[cfg(test)]
+    pub(crate) fn tune_sent_for_test(&mut self, cmd: &str) {
+        self.we_tune.sent(cmd);
+    }
+
+    /// The two flags `send` reads, for a test outside this file: the very
+    /// ones the controller holds, not copies.
+    #[cfg(test)]
+    pub(crate) fn gate_handles_for_test(&self) -> (Arc<AtomicBool>, Arc<AtomicBool>) {
+        (self.tx_blocked.clone(), self.rx_only_position.clone())
+    }
+
+    /// The link drops as the reader sees it, for a test outside this file.
+    #[cfg(test)]
+    pub(crate) fn disconnect_for_test(&mut self) {
+        self.handle_disconnect();
     }
 
     /// Thetis is putting out a carrier: its TRX notification (MOX, a
@@ -1546,12 +1954,20 @@ impl TciConnection {
                 // still be transmitting for nobody. Answered on the receiver it
                 // names: `TRX:0` would move a VFO-B transmitter to VFO A.
                 // TUNE keys MOX too: our own TUNE is ours, not a PTT left behind.
+                // Read before `left_behind` marks the receiver seen.
+                let snapshot = !self.first_trx.seen(receiver);
                 if self.first_trx.left_behind(receiver, active, self.tx_active || self.we_tune.on()) {
                     warn!(
                         "SAFETY: Thetis was transmitting on receiver {} when the server connected and nothing here holds the PTT; TRX:{},false sent",
                         receiver, receiver
                     );
                     self.send(&format!("TRX:{},false;", receiver)).await;
+                    // A send the writer could not take ended the connection
+                    // there, and with it what this one knew of Thetis: what it
+                    // reported is not written back over that.
+                    if !self.connected {
+                        return;
+                    }
                 }
                 // RX-only Amplitec gate: server-initiated PTT paths are already
                 // preventively closed off in `PttController`, but Thetis's own
@@ -1560,28 +1976,35 @@ impl TciConnection {
                 // we catch the incoming TRX-notif and send
                 // `TRX:0,false;` straight back - sub-100 ms reaction time compared
                 // to the ~200 ms broadcast-tick check.
-                let blocked = self.tx_blocked.load(Ordering::Relaxed);
-                debug!("TCI TRX recv: active={} tx_blocked={}", active, blocked);
-                // Kept before the RX-only answer returns: a TUNE on a position that
-                // is already RX-only is stopped from the loop on this receiver.
+                let blocked = self.rx_only_position.load(Ordering::Relaxed);
+                debug!("TCI TRX recv: active={} rx_only_position={}", active, blocked);
+                // Kept before the RX-only answer: a TUNE on a position that is
+                // already RX-only is stopped from the loop on this receiver.
                 if active {
                     self.thetis_tx_receiver = receiver;
                 }
+                // TL2-1 ctun-auto-recenter: mirror TRX-state in separate
+                // `thetis_tx_active` so external-PTT (Thetis-self, footswitch,
+                // VOX, etc.) also causes ctun-recenter defer. Per receiver, as
+                // TUNE: the off of the connect snapshot is the other receiver
+                // (`trx:0,true` then `trx:1,false`) and wipes nothing; a later off
+                // is off (one MOX). Recorded also on an RX-only position, so a
+                // switch that waits for the block sees this carrier.
+                if active {
+                    self.thetis_trx_rx[(receiver as usize).min(1)] = true;
+                } else if snapshot {
+                    self.thetis_trx_rx[(receiver as usize).min(1)] = false;
+                } else {
+                    self.thetis_trx_rx = [false; 2];
+                }
+                self.thetis_tx_active = self.thetis_trx_rx.iter().any(|&t| t);
                 if active && blocked {
                     warn!("Thetis-direct TX detected on RX-only Amplitec position; forcing TRX off (receiver {})", receiver);
                     // On the receiver it names, as for a PTT left behind (build 214):
-                    // `TRX:0` would move a VFO-B transmitter to VFO A.
+                    // `TRX:0` would move a VFO-B transmitter to VFO A. Thetis
+                    // reports the off after it, which clears the flag again.
                     self.send(&format!("TRX:{},false;", receiver)).await;
-                    // Do not update self.thetis_tx_active - Thetis sends
-                    // a TRX:0,false; notif straight after, which this handler
-                    // will still react to.
                     return;
-                }
-                // TL2-1 ctun-auto-recenter: mirror TRX-state in separate
-                // `thetis_tx_active` so external-PTT (Thetis-self, footswitch,
-                // VOX, etc.) also causes ctun-recenter defer.
-                if active != self.thetis_tx_active {
-                    self.thetis_tx_active = active;
                 }
                 if active != self.tx_active {
                     info!("TCI TRX: {}", if active { "TX" } else { "RX" });
@@ -1678,16 +2101,22 @@ impl TciConnection {
             TciNotification::Volume { .. } => {
                 // Master volume - not used for RX AF gain sync
             }
-            TciNotification::RxVolume { receiver, db, .. } => {
-                // Map dB to 0..100% (Thetis sends -60.0..0.0 dB range)
-                let pct = (((db + 60.0) * 100.0 / 60.0).clamp(0.0, 100.0)) as u8;
+            TciNotification::RxVolume { receiver, _sub_rx: 0, db } => {
+                let pct = volume_from_db(db);
                 if receiver == 0 {
                     self.rx_af_gain = pct;
                 } else if receiver == 1 {
                     self.rx2_af_gain = pct;
                 }
+                if let Some(trail) = self.volume_trail.get_mut(receiver as usize) {
+                    trail.reported(db, pct, Instant::now());
+                }
                 debug!("TCI: RX{} volume = {:.1} dB ({}%)", receiver + 1, db, pct);
             }
+            // Channel 1 is the sub receiver's own AF slider, which Thetis keeps
+            // apart from the main one (and for RX2 repeats channel 0): not this
+            // receiver's volume.
+            TciNotification::RxVolume { .. } => {}
             TciNotification::DiversityAutonullProgress { round, total, phase, gain_db, smeter } => {
                 debug!("TCI: Auto-null progress {}/{}: phase={:.1}° gain={:.1}dB smeter={:.1}dBm", round, total, phase, gain_db, smeter);
                 self.diversity_auto_progress = Some((round, total, phase, gain_db, smeter));
@@ -1824,14 +2253,34 @@ impl TciConnection {
                 // A tune carrier left behind (build 214): Thetis keeps a TCI
                 // client's TUNE when its connection goes away (stock; the fork
                 // clears it since TL2-7).
+                // Read before `tune_report` marks the receiver seen.
+                let snapshot = !self.first_tune.seen(receiver);
                 if tune_report(&mut self.first_tune, &mut self.we_tune, receiver, active) {
                     warn!(
                         "SAFETY: Thetis was tuning on receiver {} when the server connected and nothing here asked for it; tune:{},false sent",
                         receiver, receiver
                     );
                     self.send(&format!("tune:{},false;", receiver)).await;
+                    // As in the TRX arm: a send that ended the connection
+                    // leaves nothing of this report to keep.
+                    if !self.connected {
+                        return;
+                    }
                 }
-                let any = merge_tune(&mut self.tune_rx, receiver as usize, active);
+                let mut reported = merge_tune(&mut self.tune_rx, receiver as usize, active);
+                if !active && !snapshot {
+                    // Thetis has one TUN and names a receiver per report (VFO B
+                    // with RX2 on can move it between the on and the off): an
+                    // off on either is off, for what it reported and what we asked.
+                    // Not the first report on its receiver: at connect Thetis
+                    // reports both, `tune:0,true` then `tune:1,false` with a TUNE
+                    // on VFO A, and that off is the other receiver of the same
+                    // snapshot (`tune_report` keeps `we_tune` the same way).
+                    self.tune_rx = [false; 2];
+                    self.tune_ours = [false; 2];
+                    reported = false;
+                }
+                let any = reported || self.tune_ours.iter().any(|&o| o);
                 if any != self.tune_active {
                     debug!("TCI: TUNE {} (rx{})", if any { "ON" } else { "OFF" }, receiver);
                     self.tune_active = any;
@@ -2231,6 +2680,7 @@ impl TciConnection {
         self.send("rx_bin_enable:1;").await;
         self.send("rx_apf_enable:1;").await;
         self.send("rx_nf_enable:1;").await;
+        self.send("rx_volume:1,0;").await;
         tokio::time::sleep(delay).await;
 
         // Batch 5: Extension queries (capability-gated per command, or fork extensions)
@@ -2326,6 +2776,14 @@ impl TciConnection {
         self.thetis_tx_active = false;
         self.tune_active = false;
         self.tune_rx = [false; 2];
+        self.tune_ours = [false; 2];
+        self.thetis_trx_rx = [false; 2];
+        // With the TX it named: a stop for the next Thetis goes to receiver 0
+        // until that one reports otherwise.
+        self.thetis_tx_receiver = 0;
+        // A volume asked of or reported by this Thetis is not the next one's;
+        // the next connection's own report gives its first line.
+        self.volume_trail = Default::default();
         // The next connection's first reports are first again (builds 213, 214).
         self.first_trx = FirstReport::default();
         self.first_tune = FirstReport::default();
@@ -2371,18 +2829,28 @@ impl TciConnection {
         self.connections
     }
 
-    /// The link as a test needs it (build 226).
+    /// The link as a test needs it (build 226): the link and its channel
+    /// together, as `accept_stream` and `handle_disconnect` set them. Keep the
+    /// returned end while the test sends; dropped, the next send ends the link.
     #[cfg(test)]
-    pub(crate) fn set_link_for_test(&mut self, connected: bool, connections: u64) {
+    pub(crate) fn set_link_for_test(&mut self, connected: bool, connections: u64) -> Option<mpsc::Receiver<String>> {
         self.connected = connected;
         self.connections = connections;
+        if connected {
+            let (tx, rx) = mpsc::channel::<String>(1024);
+            self.cmd_tx = Some(tx);
+            Some(rx)
+        } else {
+            self.cmd_tx = None;
+            None
+        }
     }
 
     /// Stop a TX Thetis was already making when the Amplitec position became
     /// RX-only (build 220). The TRX arm answers a new "on"; this one was on
     /// before the position changed. What goes out: `rx_only_stop_commands`.
     pub async fn force_thetis_tx_off(&mut self) {
-        for cmd in rx_only_stop_commands(self.thetis_tx_receiver, self.tune_rx) {
+        for cmd in rx_only_stop_commands(self.thetis_tx_receiver, self.tune_any_side()) {
             self.send(&cmd).await;
         }
     }
@@ -2565,6 +3033,7 @@ pub(crate) struct TxRing {
 /// 195): with what is needed to answer it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Waiting {
+    /// Mono samples, whatever the channels (`tx_request_samples`).
     pub(crate) n: usize,
     pub(crate) at: Instant,
     pub(crate) sample_rate: u32,
@@ -2917,6 +3386,44 @@ fn over_line(r: &OverReport) -> String {
     )
 }
 
+/// A command that puts a carrier on the air: what `send` refuses while the TX
+/// gate is shut. TCI: `trx`, `tune` and `keyer` on, CW text (`cw_msg`,
+/// `cw_macros`, `cw_terminal`). CAT through `run_cat_ex`: `ZZTX1`, `ZZTU1`, CW
+/// text (`ZZKY`, `ZZKM`) and VOX on (`ZZVE1`).
+fn keys_the_transmitter(cmd: &str) -> bool {
+    // Thetis runs every command of a frame (it splits on `;`), so every one is judged.
+    cmd.split(';').any(keys_the_transmitter_once)
+}
+
+/// A command that takes away the radio software's own receive-only
+/// (`rx_only_ex:false`, `run_cat_ex:ZZTI0`): what `send` refuses while the
+/// position is RX-only. Not on the TX gate: after a safety loss the gate stays
+/// shut, and leaving an RX-only antenna must still end receive-only.
+fn lifts_receive_only(cmd: &str) -> bool {
+    cmd.split(';').map(str::trim).any(|part| {
+        let lower = part.to_ascii_lowercase();
+        lower == "rx_only_ex:false" || lower.starts_with("run_cat_ex:zzti0")
+    })
+}
+
+/// One command of a frame, for `keys_the_transmitter`.
+fn keys_the_transmitter_once(cmd: &str) -> bool {
+    let body = cmd.trim();
+    let Some((head, args)) = body.split_once(':') else {
+        return false;
+    };
+    let arg = |i: usize| args.split(',').nth(i).map(|a| a.trim().to_ascii_lowercase());
+    match head.trim().to_ascii_lowercase().as_str() {
+        "trx" | "tune" | "keyer" => arg(1).as_deref() == Some("true"),
+        "cw_msg" | "cw_macros" | "cw_terminal" => true,
+        "run_cat_ex" => {
+            let zz = args.trim().to_ascii_uppercase();
+            ["ZZTX1", "ZZTU1", "ZZKY", "ZZKM", "ZZVE1"].iter().any(|c| zz.starts_with(c))
+        }
+        _ => false,
+    }
+}
+
 /// A TRX off for Thetis, on either receiver (build 196). In either case:
 /// `ZZTX0` through `send_cat` goes out as `trx:0,false;` (`cat_to_tci`), and
 /// Thetis reads both.
@@ -2928,10 +3435,7 @@ fn is_trx_off(cmd: &str) -> bool {
 /// Send the answers to Thetis's requests (build 195).
 fn send_tx_answers(chrono_bin_tx: &mpsc::Sender<Vec<u8>>, answers: Vec<(Waiting, Vec<f32>)>) {
     for (w, audio) in answers {
-        let frame = build_tci_binary_frame(
-            0, w.sample_rate, w.format, w.n as u32,
-            STREAM_TYPE_TX_AUDIO, w.channels, &audio, w.format,
-        );
+        let frame = build_tx_answer(w.sample_rate, w.format, w.channels, &audio);
         let _ = chrono_bin_tx.try_send(frame);
     }
 }
@@ -2963,6 +3467,10 @@ async fn tci_reader_task(
     let mut iq_drops: [u64; 2] = [0, 0];
     // Dropped receive audio frames: RX1, RX2, binaural right (build 150).
     let mut audio_drops: [u64; 3] = [0, 0, 0];
+    // Receive audio per second against what its frames announce (RX1, RX2).
+    let mut audio_rate: [crate::tci_audio_rate::AudioRate; 2] = Default::default();
+    // The TRX-off count at the last TX_CHRONO line: one line per transmission.
+    let mut chrono_said_at: Option<u64> = None;
     loop {
         // Drain any pending TX audio into ring buffer (non-blocking), and
         // answer the requests it is enough for, or that waited too long.
@@ -3016,7 +3524,11 @@ async fn tci_reader_task(
                         if let Some(notif) = parse_tci_text(cmd) {
                             if let TciNotification::Trx { active: false, .. } = notif {
                                 // MOX ended: Thetis emptied its queue (build 195).
+                                // And the next transmission gets its TX_CHRONO line,
+                                // also when Thetis ended this one itself (2.13.3
+                                // build 13): the server's TRX-off count does not see that.
                                 tx_ring.drop_waiting();
+                                chrono_said_at = None;
                             }
                             let _ = notify_tx.try_send(notif);
                         }
@@ -3050,6 +3562,17 @@ async fn tci_reader_task(
                 match stream_type {
                     STREAM_TYPE_RX_AUDIO => {
                         let (left, right) = decode_audio_payload_stereo(payload, format, length, channels);
+                        let r = receiver.min(1) as usize;
+                        if let Some(report) = audio_rate[r].note(Instant::now(), left.len(), sample_rate) {
+                            // A source off its announced rate is a fault a user should
+                            // see; the first window of one that keeps time is a measurement.
+                            let line = report.line(["RX1", "RX2"][r]);
+                            if report.off() {
+                                info!("{line}");
+                            } else {
+                                dev_info!("{line}");
+                            }
+                        }
                         let tx = if receiver == 0 { &rx1_audio_tx } else { &rx2_audio_tx };
                         // Counted and said, as the IQ path below does (build 150).
                         // These were a bare `let _ =`, and a frame lost on one side
@@ -3111,7 +3634,16 @@ async fn tci_reader_task(
 
                         // Answer with audio, now or as soon as it comes; silence
                         // only after TX_HOLD_MAX (build 195).
-                        let waiting = Waiting { n: length as usize, at: Instant::now(), sample_rate, format, channels };
+                        let n = tx_request_samples(length, channels);
+                        // What the server asks, once per MOX (2.13.3 build 12):
+                        // the channels decide how the answer is built.
+                        let said_at = tx_off_count.load(Ordering::Relaxed);
+                        if chrono_said_at != Some(said_at) {
+                            chrono_said_at = Some(said_at);
+                            dev_info!("TCI TX_CHRONO: the first request of this transmission asks {} values in {} channel(s), {} samples, rate {}, format {}",
+                                length, channels, n, sample_rate, format);
+                        }
+                        let waiting = Waiting { n, at: Instant::now(), sample_rate, format, channels };
                         tx_ring.note_trx_off(tx_off_count.load(Ordering::Relaxed));
                         send_tx_answers(&chrono_bin_tx, tx_ring.request(waiting));
                     }
@@ -3368,7 +3900,7 @@ mod tx_ring_tests {
         assert!(is_trx_off("trx:0,false;"), "ZZTX0 through send_cat (build 197)");
         assert!(!is_trx_off("TRX:0,true,tci;") && !is_trx_off("TRX:0,true;") && !is_trx_off("TRX:0;"));
         assert_eq!(body_count("tx_ring.note_trx_off(tx_off_count.load(Ordering::Relaxed));"), 2);
-        assert_eq!(body_count("if is_trx_off(cmd) {"), 1);
+        assert_eq!(body_count("if parts().any(is_trx_off) {"), 1);
         assert_eq!(body_count("self.tx_off_count.fetch_add(1, Ordering::Relaxed);"), 1);
         // And the count is read before anything is answered, at the top of the
         // loop and before a request (after it, the limit's
@@ -3758,12 +4290,15 @@ mod first_trx_tests {
         assert!(!w.on(), "Thetis says it is off");
         let src = include_str!("tci.rs");
         let body = &src[..src.find("#[cfg(test)]\nmod first_trx_tests").unwrap()];
-        // Recorded before the connection is checked.
+        // An off is recorded before the connection is checked, an on after it.
         let send = &body[body.find("pub async fn send(&mut self, cmd: &str) {").unwrap()..];
-        let recorded = send.find("self.we_tune.sent(cmd);").expect("recorded in send");
+        let recorded = send.find("self.we_tune.sent(part);").expect("recorded in send");
         let checked = send.find("if !self.connected {").unwrap();
-        assert!(recorded < checked, "the TUNE is recorded only while connected");
-        assert_eq!(body.matches("self.we_tune.sent(cmd);").count(), 1);
+        assert!(recorded < checked, "an off is recorded also while TCI is gone");
+        assert!(send[..recorded].trim_end().ends_with("if let Some((_, false)) = tune_command(part) {"), "the off");
+        let on = checked + send[checked..].find("self.we_tune.sent(part);").expect("the on, after the check");
+        assert!(send[..on].trim_end().ends_with("if on {"), "the on");
+        assert_eq!(body.matches("self.we_tune.sent(part);").count(), 2);
         assert_eq!(body.matches("intent.reported_off();").count(), 2, "only in tune_report");
         assert_eq!(
             body.matches("if tune_report(&mut self.first_tune, &mut self.we_tune, receiver, active) {").count(),
@@ -3923,5 +4458,344 @@ mod ctun_tx_tests {
         assert_eq!(t.thetis_trx_and_tune(), (true, true), "our own Tune, through the same merge");
         t.tune_from_us(0, false);
         assert!(t.tune_active, "an off on receiver 0 leaves receiver 1's Tune");
+    }
+
+    /// The RX-only stop keeps a TUNE Thetis reports in view until Thetis says
+    /// it is off: our own off does not end it, so the loop asks again every
+    /// tick. A TUNE of ours that Thetis never reports ends with our off. Twice,
+    /// without a restart.
+    #[test]
+    fn our_tune_off_does_not_end_a_tune_thetis_reports() {
+        use super::TciNotification;
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut t = TciConnection::new(None);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
+        t.connected = true;
+        t.cmd_tx = Some(tx);
+        for pass in 0..2 {
+            rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 0, active: true }));
+            // (The first report answers a TUNE left behind on its own; not counted.)
+            while rx.try_recv().is_ok() {}
+            for tick in 0..3 {
+                rt.block_on(t.force_thetis_tx_off());
+                assert!(t.thetis_on_the_air(), "pass {pass} tick {tick}: Thetis still reports TUNE");
+            }
+            let sent: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(sent.iter().filter(|c| *c == "tune:0,false;").count(), 3, "pass {pass}: asked every tick: {sent:?}");
+            rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 0, active: false }));
+            assert!(!t.thetis_on_the_air(), "pass {pass}: Thetis says off");
+            // Ours, never reported: our off ends it, and the stop includes it.
+            rt.block_on(t.send("tune:0,true;"));
+            rt.block_on(t.force_thetis_tx_off());
+            let sent: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert!(sent.contains(&"tune:0,false;".to_string()), "pass {pass}: {sent:?}");
+            assert!(!t.thetis_on_the_air(), "pass {pass}: ours, ended by our off");
+            // The first report on a receiver is the connect snapshot: its off
+            // is the other receiver of the same TUN and wipes nothing.
+            rt.block_on(t.send("tune:0,true;"));
+            if pass == 0 {
+                rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 1, active: false }));
+                assert!(t.thetis_on_the_air(), "pass {pass}: the snapshot off on receiver 1 leaves our TUNE");
+            }
+            // A later TUNE off Thetis reports, on the other receiver, ends ours too.
+            rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 1, active: false }));
+            assert!(!t.thetis_on_the_air(), "pass {pass}: Thetis says TUNE is off");
+            // And a reported on and off on different receivers (VFO B moved
+            // between them): Thetis has one TUN, so off is off.
+            rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 1, active: true }));
+            rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 0, active: false }));
+            assert!(!t.thetis_on_the_air(), "pass {pass}: an off on the other receiver");
+            while rx.try_recv().is_ok() {}
+        }
+    }
+
+    /// A TUNE and a MOX of ours that outlive the link: at the reconnect Thetis
+    /// reports both receivers, the carrier on one and "off" on the other. That
+    /// off is the snapshot and wipes nothing: the carrier stays on the air, and
+    /// the RX-only stop keeps asking. A later off is off. Twice, with a link
+    /// that drops in between.
+    #[test]
+    fn the_connect_snapshot_keeps_a_carrier_on_the_air() {
+        use super::TciNotification;
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut t = TciConnection::new(None);
+        for pass in 0..2 {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
+            t.connected = true;
+            t.cmd_tx = Some(tx);
+            rt.block_on(t.send("tune:0,true;"));
+            t.handle_disconnect();
+            let (tx, mut rx2) = tokio::sync::mpsc::channel::<String>(64);
+            t.connected = true;
+            t.cmd_tx = Some(tx);
+            while rx.try_recv().is_ok() {}
+            // The connect snapshot, in the order the fork sends it: MOX pair, then TUNE pair.
+            rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 0, active: true }));
+            rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 1, active: false }));
+            rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 0, active: true }));
+            rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 1, active: false }));
+            assert_eq!(t.thetis_trx_and_tune(), (true, true), "pass {pass}: the snapshot offs wipe nothing");
+            while rx2.try_recv().is_ok() {}
+            rt.block_on(t.force_thetis_tx_off());
+            let sent: Vec<String> = std::iter::from_fn(|| rx2.try_recv().ok()).collect();
+            assert!(sent.contains(&"tune:0,false;".to_string()), "pass {pass}: the stop still asks: {sent:?}");
+            // Later offs are off, on either receiver.
+            rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 1, active: false }));
+            rt.block_on(t.handle_notification(TciNotification::Tune { receiver: 1, active: false }));
+            assert_eq!(t.thetis_trx_and_tune(), (false, false), "pass {pass}");
+            t.handle_disconnect();
+        }
+    }
+
+    /// A TX keyed at the radio PC: on an RX-only position it is answered with
+    /// TRX off and still counts as on the air until Thetis reports the off; on
+    /// another position it is left alone, also when the gate is shut for good.
+    /// Lifting receive-only goes by the position, not the gate. Twice, without
+    /// a restart.
+    #[test]
+    fn the_radio_pc_is_answered_by_the_position_not_the_gate() {
+        use super::TciNotification;
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut t = TciConnection::new(None);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
+        t.connected = true;
+        t.cmd_tx = Some(tx);
+        let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let position = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        t.set_tx_blocked_handle(gate.clone());
+        t.set_rx_only_position_handle(position.clone());
+        // The connect snapshot first (no TX), so what follows is a key at the radio PC.
+        rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 0, active: false }));
+        rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 1, active: false }));
+        while rx.try_recv().is_ok() {}
+        for pass in 0..2 {
+            // The gate shut for good, an ordinary antenna: the operator keeps transmitting.
+            rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 0, active: true }));
+            assert!(t.thetis_on_the_air(), "pass {pass}");
+            assert!(rx.try_recv().is_err(), "pass {pass}: nothing sent back on an ordinary antenna");
+            rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 0, active: false }));
+            rt.block_on(t.send("rx_only_ex:false;"));
+            assert_eq!(rx.try_recv().as_deref(), Ok("rx_only_ex:false;"), "pass {pass}: receive-only may end");
+            // An RX-only position: answered, and on the air until Thetis says off.
+            position.store(true, std::sync::atomic::Ordering::Relaxed);
+            rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 1, active: true }));
+            assert_eq!(rx.try_recv().as_deref(), Ok("TRX:1,false;"), "pass {pass}");
+            assert!(t.thetis_on_the_air(), "pass {pass}: a switch that waits sees it");
+            rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 1, active: false }));
+            assert!(!t.thetis_on_the_air(), "pass {pass}");
+            rt.block_on(t.send("rx_only_ex:false;"));
+            rt.block_on(t.send("run_cat_ex:ZZTI0;"));
+            assert!(rx.try_recv().is_err(), "pass {pass}: receive-only stays on an RX-only position");
+            position.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        let src = include_str!("tci.rs");
+        let send = &src[src.find("pub async fn send(&mut self, cmd: &str) {").unwrap()..];
+        // Up to the bookkeeping: the two checks stand before it.
+        let send = &send[..send.find("// The bookkeeping below reads every command of a frame").unwrap()];
+        assert!(send.contains("if self.tx_blocked.load(Ordering::Relaxed) && keys_the_transmitter(cmd) {"));
+        assert!(send.contains("if self.rx_only_position.load(Ordering::Relaxed) && lifts_receive_only(cmd) {"));
+    }
+
+    /// What keys the transmitter, as `send` refuses it while the gate is shut:
+    /// TRX, TUNE and the CW key on, CW text, and the same in CAT through
+    /// `run_cat_ex`, in either case. What stops a transmission or sets
+    /// receive-only goes through. Lifting receive-only is apart
+    /// (`lifts_receive_only`, on the position).
+    #[test]
+    fn what_keys_the_transmitter() {
+        use super::keys_the_transmitter as keys;
+        use super::lifts_receive_only as lifts;
+        for cmd in ["rx_only_ex:false;", "RX_ONLY_EX:false;", "run_cat_ex:ZZTI0;", "run_cat_ex:zzti0;", "rx_only_ex:true;rx_only_ex:false;"] {
+            assert!(lifts(cmd) && !keys(cmd), "{cmd}");
+        }
+        for cmd in ["rx_only_ex:true;", "run_cat_ex:ZZTI1;", "tune:0,true;", ""] {
+            assert!(!lifts(cmd), "{cmd}");
+        }
+        for cmd in [
+            "TRX:0,true,tci;", "trx:1,true;", "tune:0,true;", "TUNE:1,true;", "keyer:0,true,120;",
+            "cw_msg:0,CQ;", "cw_macros:0,CQ TEST;", "cw_terminal:true;",
+            "run_cat_ex:ZZTX1;", "run_cat_ex:zztu1;", "run_cat_ex:ZZKYCQ;", "run_cat_ex:ZZKM1;",
+            "run_cat_ex:ZZVE1;",
+            // Thetis runs every command of a frame.
+            "drive:0,50;tune:0,true;", "vfo:0,0,7073000;TRX:0,true,tci;",
+        ] {
+            assert!(keys(cmd), "{cmd}");
+        }
+        for cmd in [
+            "TRX:0,false;", "tune:0,false;", "keyer:0,false;", "cw_macros_stop;", "cw_macros_speed:20;",
+            "rx_only_ex:true;", "run_cat_ex:ZZTX0;", "run_cat_ex:ZZTU0;", "run_cat_ex:ZZTI1;",
+            "run_cat_ex:ZZVE0;", "run_cat_ex:ZZFI;", "vfo:0,0,7073000;", "drive:0,50;", "tune_drive:0,20;",
+            "TRX:0,false;tune:0,false;", "",
+        ] {
+            assert!(!keys(cmd), "{cmd}");
+        }
+    }
+
+    /// On an RX-only position `send` lets nothing out that keys the
+    /// transmitter, whichever path sent it; stopping still goes out. Twice,
+    /// without a restart, and open again when the position is left.
+    #[test]
+    fn an_rx_only_position_lets_nothing_key_the_transmitter() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut t = TciConnection::new(None);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
+        t.connected = true;
+        t.cmd_tx = Some(tx);
+        let blocked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        t.set_tx_blocked_handle(blocked.clone());
+        for pass in 0..2 {
+            rt.block_on(t.send("TUNE:0,true;"));
+            rt.block_on(t.set_tune(true));
+            rt.block_on(t.cw_key(true, None));
+            rt.block_on(t.run_cat("ZZTX1"));
+            rt.block_on(t.send("TRX:0,true,tci;"));
+            assert!(!t.thetis_on_the_air(), "pass {pass}: no TUNE counted");
+            rt.block_on(t.send("TRX:0,false;"));
+            rt.block_on(t.set_tune(false));
+            let mut sent = Vec::new();
+            while let Ok(c) = rx.try_recv() {
+                sent.push(c);
+            }
+            assert_eq!(sent, ["TRX:0,false;", "tune:0,false;"], "pass {pass}: only the stops went out");
+        }
+        blocked.store(false, std::sync::atomic::Ordering::Relaxed);
+        rt.block_on(t.set_tune(true));
+        assert_eq!(rx.try_recv().as_deref(), Ok("tune:0,true;"), "open again");
+        assert!(t.thetis_on_the_air());
+        // The gate is the first thing `send` does.
+        let src = include_str!("tci.rs");
+        let send = &src[src.find("pub async fn send(&mut self, cmd: &str) {").unwrap()..];
+        let gate = send.find("if self.tx_blocked.load(Ordering::Relaxed) && keys_the_transmitter(cmd) {").unwrap();
+        assert!(
+            send[..gate].lines().skip(1).all(|l| l.trim().is_empty() || l.trim().starts_with("//")),
+            "nothing in send comes before the gate"
+        );
+    }
+
+    /// A report whose answer the writer could not take ends the connection,
+    /// and nothing of it, or of what is queued behind it, is kept.
+    #[test]
+    fn a_report_answered_by_a_failed_send_is_not_kept() {
+        use super::TciNotification;
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut t = TciConnection::new(None);
+        // A carrier left behind at connect, answered with an off the writer
+        // could not take: the send ends the link, and what Thetis reported is
+        // not written back over what that cleared. TRX and TUNE, twice.
+        for pass in 0..2 {
+            for notif in [
+                TciNotification::Trx { receiver: 0, active: true },
+                TciNotification::Trx { receiver: 1, active: true },
+                TciNotification::Tune { receiver: 0, active: true },
+                TciNotification::Tune { receiver: 1, active: true },
+            ] {
+                let (tx, wire) = tokio::sync::mpsc::channel::<String>(16);
+                drop(wire);
+                t.connected = true;
+                t.cmd_tx = Some(tx);
+                rt.block_on(t.handle_notification(notif));
+                assert!(!t.is_connected(), "pass {pass}: the failed send ended the link");
+                assert!(!t.thetis_on_the_air(), "pass {pass}: and the report is not kept");
+                assert_eq!((t.tune_rx, t.tune_ours, t.thetis_trx_rx), ([false; 2], [false; 2], [false; 2]),
+                    "pass {pass}: nor any receiver's part of it");
+                assert_eq!(t.thetis_tx_receiver, 0, "pass {pass}: nor the receiver it named");
+            }
+        }
+        // With the writer there, the same report is answered and kept until
+        // Thetis reports the off.
+        let (tx, mut wire) = tokio::sync::mpsc::channel::<String>(16);
+        t.connected = true;
+        t.cmd_tx = Some(tx);
+        rt.block_on(t.handle_notification(TciNotification::Trx { receiver: 1, active: true }));
+        assert_eq!(wire.try_recv().ok().as_deref(), Some("TRX:1,false;"));
+        assert!(t.is_connected() && t.thetis_on_the_air());
+        assert_eq!(t.thetis_tx_receiver, 1);
+        t.handle_disconnect();
+        assert_eq!(t.thetis_tx_receiver, 0, "the receiver goes with its Thetis");
+        // Through the poll: the report whose answer fails ends the drain, and
+        // the reports queued behind it are not written. Twice.
+        for pass in 0..2 {
+            let (tx, wire) = tokio::sync::mpsc::channel::<String>(16);
+            drop(wire);
+            let (ntx, nrx) = tokio::sync::mpsc::channel::<TciNotification>(16);
+            ntx.try_send(TciNotification::Tune { receiver: 0, active: true }).unwrap();
+            ntx.try_send(TciNotification::Trx { receiver: 1, active: true }).unwrap();
+            ntx.try_send(TciNotification::RxVolume { receiver: 0, _sub_rx: 0, db: -6.0 }).unwrap();
+            t.connected = true;
+            t.cmd_tx = Some(tx);
+            t.notify_rx = Some(nrx);
+            // Our own PTT on: the TRX behind is then not a carrier left
+            // behind, so no answer of its own stops it; only the break does.
+            t.tx_active = true;
+            rt.block_on(t.poll_and_parse());
+            assert!(!t.is_connected(), "pass {pass}");
+            assert!(!t.thetis_on_the_air(), "pass {pass}: the TRX behind it is not kept");
+            assert_eq!(t.volume_trail[0].settled(std::time::Instant::now() + super::VOLUME_SETTLE * 2), None,
+                "pass {pass}: nor the volume behind it");
+        }
+    }
+
+    /// Every TUNE we send is on the air at once, whichever path sent it: the
+    /// app's `set_tune`, and the antenna tuner's raw `TUNE:0,true;`. Nothing
+    /// that does not go out counts. Twice, without a restart.
+    #[test]
+    fn every_tune_we_send_is_on_the_air_at_once() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut t = TciConnection::new(None);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(16);
+        t.connected = true;
+        t.cmd_tx = Some(tx);
+        for pass in 0..2 {
+            rt.block_on(t.send("TUNE:0,true;"));
+            assert!(t.thetis_on_the_air(), "pass {pass}: the tuner's TUNE");
+            assert!(t.we_tune.on(), "pass {pass}: and ours, once handed on");
+            rt.block_on(t.send("TUNE:0,false;"));
+            assert!(!t.thetis_on_the_air(), "pass {pass}: and its end");
+            rt.block_on(t.set_tune(true));
+            assert!(t.thetis_on_the_air(), "pass {pass}: the app's TUNE");
+            rt.block_on(t.set_tune(false));
+            assert!(!t.thetis_on_the_air(), "pass {pass}");
+            // Each receiver its own: an off on 0 leaves the TUNE on 1.
+            rt.block_on(t.send("tune:1,true;"));
+            rt.block_on(t.send("tune:0,false;"));
+            assert!(t.thetis_on_the_air(), "pass {pass}: receiver 1 keeps its TUNE");
+            rt.block_on(t.send("tune:1,false;"));
+            assert!(!t.thetis_on_the_air(), "pass {pass}: and its own off ends it");
+            // A TUNE inside a frame of more commands counts too, as the gate reads it.
+            rt.block_on(t.send("drive:0,50;tune:0,true;"));
+            assert!(t.thetis_on_the_air(), "pass {pass}: the second command of a frame");
+            rt.block_on(t.send("drive:0,40;tune:0,false;"));
+            assert!(!t.thetis_on_the_air(), "pass {pass}");
+            while rx.try_recv().is_ok() {}
+        }
+        while rx.try_recv().is_ok() {}
+        t.connected = false;
+        rt.block_on(t.send("TUNE:0,true;"));
+        assert!(!t.thetis_on_the_air(), "a TUNE that cannot go out is not on the air");
+        assert!(!t.we_tune.on(), "nor ours: a TUNE Thetis reports at the reconnect is not taken for it");
+        // An off said while TCI is gone still counts (build 217).
+        t.connected = true;
+        rt.block_on(t.send("tune:0,true;"));
+        t.connected = false;
+        rt.block_on(t.send("tune:0,false;"));
+        assert!(!t.we_tune.on(), "our own off, unsent");
+        // An on the writer could not take, while the link still said yes:
+        // the send ends the link, and the on is neither ours nor on the air.
+        // Twice, on the same connection.
+        for pass in 0..2 {
+            let (tx, wire) = tokio::sync::mpsc::channel::<String>(16);
+            drop(wire);
+            t.connected = true;
+            t.cmd_tx = Some(tx);
+            rt.block_on(t.send("tune:0,true;"));
+            assert!(!t.is_connected(), "pass {pass}: the failed send ended the link");
+            assert!(!t.we_tune.on(), "pass {pass}: an on that was not handed on is not ours");
+            assert!(!t.thetis_on_the_air(), "pass {pass}: nor on the air");
+        }
+        // One place records it: `send`.
+        let src = include_str!("tci.rs");
+        let src = &src[..src.find("#[cfg(test)]\nmod ctun_tx_tests").unwrap()];
+        assert_eq!(src.matches("self.tune_from_us(").count(), 1);
+        assert!(!include_str!("tci_commands.rs").contains("tune_from_us("));
     }
 }

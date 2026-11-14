@@ -3,6 +3,8 @@
 pub mod cat_health;
 pub mod thetis_power;
 pub mod audio_channels;
+#[cfg(feature = "audio-stream")]
+pub mod audio_stream;
 pub mod auth;
 pub mod codec;
 pub mod control_ack;
@@ -28,7 +30,7 @@ pub mod stream;
 pub use log as __log;
 
 /// ThetisLink version - shared by server and client
-pub const VERSION: &str = "2.13.2";
+pub const VERSION: &str = "2.14.0";
 
 /// Build number for dev builds - displayed alongside version for testing.
 /// Set to None for release builds (only show version).

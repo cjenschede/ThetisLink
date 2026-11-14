@@ -193,14 +193,14 @@ impl eframe::App for ServerApp {
                         // is borrowed while it is open.
                         let mut picked_port: Option<String> = None;
                         egui::ComboBox::from_id_salt("yaesu_port")
-                            .selected_text(if self.yaesu_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu_port.clone() })
-                            .width(120.0)
+                            .selected_text(if self.yaesu_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { crate::serial_ports::label(&self.yaesu_port).to_string() })
+                            .width(crate::serial_ports::combo_width(120.0))
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(self.yaesu_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     picked_port = Some(String::new());
                                 }
                                 for port in &self.serial_ports {
-                                    if ui.selectable_label(*port == self.yaesu_port, port).clicked() {
+                                    if ui.selectable_label(crate::serial_ports::same(port, &self.yaesu_port), crate::serial_ports::label(port)).clicked() {
                                         picked_port = Some(port.clone());
                                     }
                                 }
@@ -265,14 +265,14 @@ impl eframe::App for ServerApp {
                         // is borrowed while it is open.
                         let mut picked_port: Option<String> = None;
                         egui::ComboBox::from_id_salt("yaesu2_port")
-                            .selected_text(if self.yaesu2_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.yaesu2_port.clone() })
-                            .width(120.0)
+                            .selected_text(if self.yaesu2_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { crate::serial_ports::label(&self.yaesu2_port).to_string() })
+                            .width(crate::serial_ports::combo_width(120.0))
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(self.yaesu2_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     picked_port = Some(String::new());
                                 }
                                 for port in &self.serial_ports {
-                                    if ui.selectable_label(*port == self.yaesu2_port, port).clicked() {
+                                    if ui.selectable_label(crate::serial_ports::same(port, &self.yaesu2_port), crate::serial_ports::label(port)).clicked() {
                                         picked_port = Some(port.clone());
                                     }
                                 }
@@ -329,14 +329,14 @@ impl eframe::App for ServerApp {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.amplitec_enabled, "Amplitec 6/2");
                         egui::ComboBox::from_id_salt("amplitec_port")
-                            .selected_text(if self.amplitec_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.amplitec_port.clone() })
-                            .width(200.0)
+                            .selected_text(if self.amplitec_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { crate::serial_ports::label(&self.amplitec_port).to_string() })
+                            .width(crate::serial_ports::combo_width(200.0))
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(self.amplitec_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.amplitec_port.clear();
                                 }
                                 for port in &self.serial_ports {
-                                    if ui.selectable_label(*port == self.amplitec_port, port).clicked() {
+                                    if ui.selectable_label(crate::serial_ports::same(port, &self.amplitec_port), crate::serial_ports::label(port)).clicked() {
                                         self.amplitec_port = port.clone();
                                     }
                                 }
@@ -371,14 +371,14 @@ impl eframe::App for ServerApp {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.spe_enabled, "SPE Expert");
                         egui::ComboBox::from_id_salt("spe_port")
-                            .selected_text(if self.spe_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.spe_port.clone() })
-                            .width(200.0)
+                            .selected_text(if self.spe_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { crate::serial_ports::label(&self.spe_port).to_string() })
+                            .width(crate::serial_ports::combo_width(200.0))
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(self.spe_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.spe_port.clear();
                                 }
                                 for port in &self.serial_ports {
-                                    if ui.selectable_label(*port == self.spe_port, port).clicked() {
+                                    if ui.selectable_label(crate::serial_ports::same(port, &self.spe_port), crate::serial_ports::label(port)).clicked() {
                                         self.spe_port = port.clone();
                                     }
                                 }
@@ -420,14 +420,14 @@ impl eframe::App for ServerApp {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.ultrabeam_enabled, "UltraBeam RCU-06");
                         egui::ComboBox::from_id_salt("ultrabeam_port")
-                            .selected_text(if self.ultrabeam_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { self.ultrabeam_port.clone() })
-                            .width(200.0)
+                            .selected_text(if self.ultrabeam_port.is_empty() { rust_i18n::t!("srv_none").to_string() } else { crate::serial_ports::label(&self.ultrabeam_port).to_string() })
+                            .width(crate::serial_ports::combo_width(200.0))
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(self.ultrabeam_port.is_empty(), rust_i18n::t!("srv_none").to_string()).clicked() {
                                     self.ultrabeam_port.clear();
                                 }
                                 for port in &self.serial_ports {
-                                    if ui.selectable_label(*port == self.ultrabeam_port, port).clicked() {
+                                    if ui.selectable_label(crate::serial_ports::same(port, &self.ultrabeam_port), crate::serial_ports::label(port)).clicked() {
                                         self.ultrabeam_port = port.clone();
                                     }
                                 }

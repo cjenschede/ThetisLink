@@ -18,6 +18,34 @@ impl SdrRemoteApp {
         }
     }
 
+    /// One press of the TUNE button, or of the MIDI key. The machine
+    /// (`sdr_remote_logic::tune_button`) does the PA bypass and its waits.
+    pub(super) fn toggle_thetis_tune(&mut self) {
+        use sdr_remote_logic::tune_button::{Pa, Server};
+        let state = self.state_rx.borrow().clone();
+        let acts = self.thetis_tune_button.press(Instant::now(), Server::of(&state), Pa::of(&state));
+        self.run_thetis_tune_actions(acts);
+    }
+
+    /// The button follows the server, and the waits of the PA run out. Every
+    /// frame, from `sync_state`, so they also run off the Thetis screen.
+    pub(super) fn tick_thetis_tune(&mut self, state: &sdr_remote_logic::state::RadioState) {
+        use sdr_remote_logic::tune_button::{Pa, Server};
+        let acts = self.thetis_tune_button.tick(Instant::now(), Server::of(state), Pa::of(state));
+        self.run_thetis_tune_actions(acts);
+    }
+
+    fn run_thetis_tune_actions(&self, acts: Vec<sdr_remote_logic::tune_button::Action>) {
+        use sdr_remote_logic::tune_button::Action;
+        for a in acts {
+            let _ = self.cmd_tx.send(match a {
+                Action::Tune(on) => Command::ThetisTune(on),
+                Action::Rf2kOperate(on) => Command::Rf2kOperate(on),
+                Action::SpeToggle => Command::SpeOperate,
+            });
+        }
+    }
+
     pub(super) fn render_thetis_screen(&mut self, ui: &mut egui::Ui) {
         // Power toggle: click = on/off, long press (2s) = shutdown Thetis (ZZBY)
         const SHUTDOWN_HOLD_SECS: f32 = 2.0;
@@ -146,31 +174,12 @@ impl SdrRemoteApp {
             }
         }
 
-        // Thetis TUNE button (with PA bypass + delays)
-        // Process delayed tune-on: PA standby sent, wait 500ms then ZZTU1
-        if let Some(t) = self.tune_pending_on {
-            if t.elapsed().as_millis() >= 500 {
-                let _ = self.cmd_tx.send(Command::ThetisTune(true));
-                self.thetis_tuning = true;
-                self.tune_pending_on = None;
-            }
-        }
-        // Process delayed PA restore: ZZTU0 sent, wait 1s then restore PA
-        if let Some(t) = self.tune_pending_restore {
-            if t.elapsed().as_millis() >= 1000 {
-                if self.rf2k_connected && self.rf2k_active {
-                    let _ = self.cmd_tx.send(Command::Rf2kOperate(true));
-                }
-                if self.spe_connected && self.spe_active {
-                    let _ = self.cmd_tx.send(Command::SpeOperate);
-                }
-                self.tune_pending_restore = None;
-                self.tune_pa_was_operate = false;
-            }
-        }
+        // Thetis TUNE button (with PA bypass + delays): `toggle_thetis_tune`,
+        // and its waits in `tick_thetis_tune`.
         ui.horizontal(|ui| {
-            let waiting = self.tune_pending_on.is_some();
-            let (tune_color, tune_text) = if self.thetis_tuning {
+            let waiting = self.thetis_tune_button.waiting();
+            let tuning = self.thetis_tune_button.shown();
+            let (tune_color, tune_text) = if tuning {
                 (Color32::from_rgb(220, 60, 60), "TUNE ON")
             } else if waiting {
                 (Color32::from_rgb(180, 130, 0), "PA STBY...")
@@ -180,35 +189,15 @@ impl SdrRemoteApp {
             let tune_btn = egui::Button::new(
                 RichText::new(tune_text).color(Color32::WHITE),
             ).fill(tune_color).min_size(egui::vec2(80.0, 0.0));
-            let enabled = self.power_on && self.connected && !waiting && self.tune_pending_restore.is_none();
-            if ui.add_enabled(enabled, tune_btn).clicked() {
-                if !self.thetis_tuning {
-                    // Starting tune: bypass PA first, then delayed ZZTU1
-                    self.tune_pa_was_operate = self.rf2k_operate || self.spe_state == 2;
-                    if self.tune_pa_was_operate {
-                        if self.rf2k_operate {
-                            let _ = self.cmd_tx.send(Command::Rf2kOperate(false));
-                        }
-                        if self.spe_state == 2 {
-                            let _ = self.cmd_tx.send(Command::SpeOperate);
-                        }
-                        self.tune_pending_on = Some(Instant::now()); // 500ms delay
-                    } else {
-                        // No PA active, tune immediately
-                        let _ = self.cmd_tx.send(Command::ThetisTune(true));
-                        self.thetis_tuning = true;
-                    }
-                } else {
-                    // Stopping tune: ZZTU0 immediately, delayed PA restore
-                    let _ = self.cmd_tx.send(Command::ThetisTune(false));
-                    self.thetis_tuning = false;
-                    if self.tune_pa_was_operate {
-                        self.tune_pending_restore = Some(Instant::now()); // 1s delay
-                    }
-                }
+            let can_press = {
+                let state = self.state_rx.borrow();
+                self.thetis_tune_button.can_press(sdr_remote_logic::tune_button::Server::of(&state))
+            };
+            if ui.add_enabled(can_press, tune_btn).clicked() {
+                self.toggle_thetis_tune();
             }
 
-            if self.thetis_tuning {
+            if tuning {
                 ui.label(RichText::new("Carrier ON").color(Color32::from_rgb(255, 100, 100)));
             }
         });

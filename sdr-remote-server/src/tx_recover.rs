@@ -378,6 +378,12 @@ pub fn play_tick(
     out
 }
 
+/// The resampler from the network's 16 kHz to a sound card playing at `hz`:
+/// the start and a rebuild both build it here.
+fn to_card(hz: u32) -> anyhow::Result<Resampler> {
+    resampler(NETWORK_SAMPLE_RATE_WIDEBAND, hz, FRAME_SAMPLES_WIDEBAND, UpFilter::Long)
+}
+
 /// A radio's transmit audio: packets in (sequence, timestamp, Opus) - the
 /// timestamp lets the buffer grow on a jittery line as Thetis's does (build
 /// 167: without it the target stayed at 3) -, a jitter buffer
@@ -393,7 +399,8 @@ pub async fn radio_tx_task(
     tx_audio: tokio::sync::mpsc::Sender<Vec<f32>>,
     gain_shared: Arc<AtomicU32>,
     timing: Option<TxTiming>,
-    tx_rate: u32,
+    // The rate the radio's sound card plays at; it can open later, at its own.
+    tx_rate: crate::yaesu::OpenRate,
     released: tokio::sync::mpsc::UnboundedSender<ReleasePlayed>,
 ) {
     let mut decoder = match StreamDecoder::new() {
@@ -403,7 +410,8 @@ pub async fn radio_tx_task(
             return;
         }
     };
-    let mut to_radio = match resampler(NETWORK_SAMPLE_RATE_WIDEBAND, tx_rate, FRAME_SAMPLES_WIDEBAND, UpFilter::Long) {
+    let mut follow = crate::yaesu::RateFollower::new(tx_rate.get());
+    let mut to_radio = match to_card(tx_rate.get()) {
         Ok(r) => r,
         Err(e) => {
             log::error!("{} TX resampler init: {}", label, e);
@@ -411,8 +419,8 @@ pub async fn radio_tx_task(
         }
     };
     info!(
-        "{} TX task started (wideband Opus 16kHz -> {}Hz, jitter buffer as Thetis); {}",
-        label, tx_rate, to_radio
+        "{} TX task started (wideband Opus, jitter buffer as Thetis); {}",
+        label, to_radio.built()
     );
     // Thetis's buffer and its catching up in the pauses (build 263; until then
     // the old numbers, 3-20, and a trim wherever it fell).
@@ -482,6 +490,22 @@ pub async fn radio_tx_task(
                 // (build 278), as Thetis's tick reads its ring first.
                 let ring = timing.as_ref().and_then(|t| t.ring_ms().map(|level| (level, t.lead_ms())));
                 let played = play_tick(&mut jitter, &mut decoder, &mut loss, &mut trim, Instant::now(), ring);
+                // The card opened at another rate (a radio switched on after
+                // the server started): the resampler to it is built again.
+                if let Some(hz) = follow.changed(tx_rate.get()) {
+                    match to_card(hz) {
+                        Ok(r) => {
+                            to_radio = r;
+                            follow.built(hz);
+                            info!("{} TX resampler: the sound card plays at {} Hz now; {}", label, hz, to_radio.built());
+                        }
+                        Err(e) => {
+                            if follow.failed(hz) {
+                                log::error!("{} TX resampler for {} Hz: {:#}; the old one stays, tried again on every tick", label, hz, e);
+                            }
+                        }
+                    }
+                }
                 for pcm in played.pcm {
                     send(pcm, &mut to_radio);
                 }

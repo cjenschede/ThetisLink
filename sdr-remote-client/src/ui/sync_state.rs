@@ -722,7 +722,8 @@ impl SdrRemoteApp {
         self.nr_level = state.nr_level;
         self.anf_on = state.anf_on;
         self.drive_level = state.drive_level;
-        if state.rx_af_gain > 0 {
+        // Once the server has said it, 0 % included: a 0 is a volume.
+        if state.rx_volume_synced {
             self.rx_volume = state.rx_af_gain as f32 / 100.0;
         }
         self.audio_error = state.audio_error;
@@ -794,6 +795,13 @@ impl SdrRemoteApp {
             self.filter_high_hz = state.filter_high_hz;
         }
         self.thetis_starting = state.thetis_starting;
+        // The TUNE button follows Thetis (2.13.3 build 1), not its own last
+        // press: after a link that dropped, or with a second client, it showed
+        // TUNE off over a carrier that was on. A second after a press of our
+        // own, so the button does not flick back before the server heard it.
+        // The rule, the PA bypass and the PA after a TUNE that ended
+        // elsewhere: `sdr_remote_logic::tune_button`, via `tick_thetis_tune`.
+        self.tick_thetis_tune(&state);
         // TCI controls - suppress server sync for 500ms after local change
         let tci_accept = self.tci_control_changed_at
             .map_or(true, |t| t.elapsed().as_millis() > 1000);

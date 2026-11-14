@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import com.sdrremote.R
 import uniffi.sdr_remote.version
 import kotlin.math.log10
+import kotlin.math.roundToInt
 
 // Consumes vertical scroll on slider rows so LazyColumn doesn't intercept horizontal drags
 private val SliderNestedScrollConnection = object : NestedScrollConnection {
@@ -52,12 +53,15 @@ private val SliderNestedScrollConnection = object : NestedScrollConnection {
 @Composable
 fun VolumeControls(
     rxVolume: Float,
+    // Thetis' own volume, null while not known: the slider goes back to it
+    // after a release, as the drive does (a value Thetis kept unchanged).
+    serverRxVolume: Float?,
     txGain: Float,
     onRxVolumeChange: (Float) -> Unit,
     onTxGainChange: (Float) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        VolumeSlider(label = stringResource(R.string.stats_rx_volume), initial = rxVolume, onChange = onRxVolumeChange)
+        VolumeSlider(label = stringResource(R.string.stats_rx_volume), initial = rxVolume, server = serverRxVolume, onChange = onRxVolumeChange)
         GainSliderDb(label = stringResource(R.string.stats_tx_gain), initialDb = uniffi.sdr_remote.txGainDb(txGain),
             onChange = { onTxGainChange(uniffi.sdr_remote.txGainFactor(it)) })
     }
@@ -241,7 +245,7 @@ fun GainSliderDb(label: String, initialDb: Float, onChange: (Float) -> Unit) {
 }
 
 @Composable
-private fun VolumeSlider(label: String, initial: Float, maxValue: Float = 1f, logarithmic: Boolean = false, onChange: (Float) -> Unit) {
+private fun VolumeSlider(label: String, initial: Float, server: Float? = null, maxValue: Float = 1f, logarithmic: Boolean = false, onChange: (Float) -> Unit) {
     // For logarithmic sliders: map between linear slider position (0..1) and log value (0.001..max)
     val logMin = 0.001f
     fun valueToSlider(v: Float): Float = if (logarithmic && maxValue > 0f) {
@@ -253,7 +257,9 @@ private fun VolumeSlider(label: String, initial: Float, maxValue: Float = 1f, lo
         kotlin.math.exp(kotlin.math.ln(logMin) + s * (kotlin.math.ln(maxValue) - kotlin.math.ln(logMin)))
     } else s * maxValue
 
-    var sliderPos by remember(initial) { mutableFloatStateOf(valueToSlider(initial)) }
+    // The server's value when there is one, else the slider's own (Yaesu
+    // mode, or before Thetis said it): followed after a release.
+    val pos = rememberFollowingValue(valueToSlider(server ?: initial))
 
     Row(
         modifier = Modifier
@@ -267,14 +273,17 @@ private fun VolumeSlider(label: String, initial: Float, maxValue: Float = 1f, lo
             fontSize = 14.sp,
         )
         Slider(
-            value = sliderPos,
-            onValueChange = { sliderPos = it },
-            onValueChangeFinished = { onChange(sliderToValue(sliderPos)) },
+            value = pos.value,
+            onValueChange = { pos.drag(it) },
+            onValueChangeFinished = {
+                onChange(sliderToValue(pos.value))
+                pos.release()
+            },
             valueRange = 0f..1f,
             modifier = Modifier.weight(0.55f),
         )
         Text(
-            text = "${(sliderToValue(sliderPos) * 100).toInt()}%",
+            text = "${(sliderToValue(pos.value) * 100).roundToInt()}%",
             modifier = Modifier.weight(0.2f),
             fontSize = 14.sp,
         )

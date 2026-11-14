@@ -940,7 +940,7 @@ impl NetworkService {
         );
         // What the server keys on its own (tune carrier, ZZTX1) goes past the
         // session; this gate stops it. The dead task was the one that set it.
-        self.ptt.lock().await.tx_blocked_handle().store(true, Ordering::Relaxed);
+        self.ptt.lock().await.block_for_good();
         let closed = self.session.lock().await.close_tx();
         for (target, addr) in &closed.held {
             error!("SAFETY: {} held {}; taken away", addr, target.radio_name());
@@ -1139,7 +1139,7 @@ impl NetworkService {
         let _yaesu_audio_handle = {
             let yaesu_audio = yaesu.as_ref().and_then(|y| {
                 let rx = y.audio_rx.lock().ok().and_then(|mut a| a.take())?;
-                Some((rx, y.audio_sample_rate, y.status_arc()))
+                Some((rx, y.capture_rate.clone(), y.status_arc()))
             });
             if let Some((audio_rx, sample_rate, yaesu_status)) = yaesu_audio {
                 let socket = self.socket.clone();
@@ -1162,7 +1162,7 @@ impl NetworkService {
         let _yaesu2_audio_handle = {
             let yaesu2_audio = yaesu2.as_ref().and_then(|y| {
                 let rx = y.audio_rx.lock().ok().and_then(|mut a| a.take())?;
-                Some((rx, y.audio_sample_rate, y.status_arc()))
+                Some((rx, y.capture_rate.clone(), y.status_arc()))
             });
             if let Some((audio_rx, sample_rate, yaesu2_status)) = yaesu2_audio {
                 let socket = self.socket.clone();
@@ -1873,6 +1873,10 @@ impl NetworkService {
                 // This server sent ZZTI1 and has not turned it off since: only then
                 // does it send ZZTI0.
                 let mut stock_rx_only_ours = false;
+                // A switch to an RX-only position that waits for the block:
+                // the position, since when, and the scan count of the switch
+                // when the command went out.
+                let mut rx_only_switch: Option<(u8, std::time::Instant, Option<u32>)> = None;
                 let _last_sync_freq: u64 = 0; // last freq synced B=A
                 let mut prev_controls: std::collections::HashMap<u8, u16> = std::collections::HashMap::new();
                 let mut prev_client_count: usize = 0;
@@ -1927,6 +1931,10 @@ impl NetworkService {
                 // (PTT packet, ZZTX1, ZZTU1) never send Thetis a TX-on
                 // command on a blocked position.
                 let tx_blocked_gate = ptt.lock().await.tx_blocked_handle();
+                // What the safety shut stays shut, whatever the antenna (`block_for_good`).
+                let blocked_for_good = ptt.lock().await.blocked_for_good_handle();
+                // The position alone, for what answers the radio PC (`rx_only_position`).
+                let rx_only_position_gate = ptt.lock().await.rx_only_position_handle();
                 // Written right below, where `RxOnlyGuard` is computed; the
                 // heartbeat and the server window read it (build 217).
                 let rx_only_unguarded_gate = ptt.lock().await.rx_only_unguarded_handle();
@@ -1975,6 +1983,11 @@ impl NetworkService {
                 // spectrum tick writes the line.
                 let mut probe_is_tx = false;
                 let mut tx_probe = crate::spectrum::TxProbe::default();
+                // The spectrum's calibration against the S-meter, ten seconds a line.
+                let mut cal_watch_rx1 = crate::spectrum::CalWatch::new("RX1");
+                let mut cal_watch_rx2 = crate::spectrum::CalWatch::new("RX2");
+                let mut cal_signal_rx1: Option<Instant> = None;
+                let mut cal_signal_rx2: Option<Instant> = None;
                 loop {
                     tokio::select! {
                         _ = safety_tick.tick() => {
@@ -1995,6 +2008,16 @@ impl NetworkService {
                                 (crate::session::TxTarget::Yaesu2, &_yaesu2, &yaesu2_ptt_flag),
                             ] {
                                 let_a_silent_holder_go(&session, target, radio.as_deref(), flag).await;
+                            }
+                            // The TUNE of a client that went (2.13.3 build 1): the
+                            // clock of Thetis looks at the PTT only, and a TUNE from
+                            // a client kept its carrier after the link was gone
+                            // (field test 2026-11-08). Two locks one after the
+                            // other, never nested; the release asks the owner again.
+                            let tune_by = ptt.lock().await.tune_owner_to_watch();
+                            if let Some(addr) = tune_by {
+                                let silence = session.lock().await.silence_of(addr, Instant::now());
+                                ptt.lock().await.release_tune_left_by(addr, silence).await;
                             }
                             // Every 100 ms, not on the 1 s CAT tick it ran on until
                             // build 134: a deadline of 3 s was met anywhere between
@@ -2288,7 +2311,8 @@ impl NetworkService {
                                     _ => (false, None),
                                 };
                                 // By name.
-                                let crate::ptt::TxNow { mode: mode_u8, ours: tx_active, thetis: thetis_tx } = ptt.lock().await.tx_now();
+                                let tx_now = ptt.lock().await.tx_now();
+                                let crate::ptt::TxNow { mode: mode_u8, ours: tx_active, thetis: thetis_tx, .. } = tx_now;
                                 // Preventive TX-gate: push the current
                                 // "is the current Amplitec position RX-only?"
                                 // status into the Ptt gate so that no
@@ -2303,10 +2327,29 @@ impl NetworkService {
                                             .unwrap_or(false)
                                     })
                                     .unwrap_or(false);
+                                // A click on the server screen goes through the same
+                                // request as a client's (`request_switch_a`).
+                                if let Some(amp) = amplitec.as_ref() {
+                                    if let Some(pos) = amp.take_screen_request() {
+                                        amp.request_switch_a(pos, &live_config.amplitec_tx_blocked, tx_now.on_the_air(), &tx_blocked_gate, "server screen");
+                                    }
+                                }
+                                // A requested RX-only position blocks from the request on,
+                                // before the switch moves (`switch_a_request`).
+                                if let Some(target) = amplitec.as_ref().and_then(|a| a.rx_only_target()) {
+                                    if rx_only_switch.is_none_or(|(t, _, _)| t != target) {
+                                        rx_only_switch = Some((target, std::time::Instant::now(), None));
+                                    }
+                                } else if rx_only_switch.is_some_and(|(_, _, sent)| sent.is_none()) {
+                                    // Another switch of A replaced the request before it went out.
+                                    rx_only_switch = None;
+                                }
+                                let pos_is_blocked = pos_is_blocked || rx_only_switch.is_some();
                                 tx_blocked_gate.store(
-                                    pos_is_blocked,
+                                    pos_is_blocked || blocked_for_good.load(std::sync::atomic::Ordering::Relaxed),
                                     std::sync::atomic::Ordering::Relaxed,
                                 );
+                                rx_only_position_gate.store(pos_is_blocked, std::sync::atomic::Ordering::Relaxed);
                                 // On a change of the RX-only status:
                                 // push Thetis' "Receive only" preventive
                                 // TX-inhibit via the fork command `rx_only_ex`.
@@ -2486,6 +2529,44 @@ impl NetworkService {
                                              Receive only is kept through CAT ZZTI from now on and turned off when the position is left.",
                                             prev,
                                         );
+                                    }
+                                }
+                                // The waiting switch to an RX-only position: out once the
+                                // radio software holds its own receive-only and nothing is
+                                // on the air; a radio without one has only the server's
+                                // block (warned above as unguarded).
+                                if let (Some((target, since, sent)), Some(amp)) = (rx_only_switch, amplitec.as_ref()) {
+                                    let radio_closed = crate::amplitec::radio_holds_receive_only(
+                                        has_rx_only_cap,
+                                        ptt.lock().await.thetis_rx_only(),
+                                        tci_up_now && answers_run_cat_ex,
+                                        stock_rx_only_ours,
+                                    );
+                                    let switch = amp.status();
+                                    match crate::amplitec::pending_switch_step(target, sent, radio_closed, tx_now.on_the_air(), &switch, since.elapsed()) {
+                                        crate::amplitec::PendingSwitch::Wait => {}
+                                        crate::amplitec::PendingSwitch::Switch => {
+                                            amp.send_command(crate::amplitec::AmplitecCmd::SetSwitchA(target));
+                                            rx_only_switch = Some((target, since, Some(switch.scans)));
+                                            info!("Amplitec: Switch A -> {} (RX-only) after the block", target);
+                                        }
+                                        crate::amplitec::PendingSwitch::Done => {
+                                            // Also when the position was already there and no command
+                                            // went out: the request ends, so a later change at the
+                                            // front panel is not switched back.
+                                            amp.drop_rx_only(target);
+                                            rx_only_switch = None;
+                                        }
+                                        crate::amplitec::PendingSwitch::GiveUp => {
+                                            amp.drop_rx_only(target);
+                                            rx_only_switch = None;
+                                            warn!(
+                                                "Amplitec: Switch A -> {} (RX-only) given up after {:?}: {}",
+                                                target,
+                                                since.elapsed(),
+                                                if sent.is_some() { "the switch answered at another position" } else { "transmitting was not blocked in time" }
+                                            );
+                                        }
                                     }
                                 }
                                 // Reactive catch-all for a ThetisLink TX that
@@ -2943,17 +3024,10 @@ impl NetworkService {
                                 None => std::future::pending::<Option<String>>().await,
                             }
                         } => {
-                            // Translate ZZTU CAT to TCI TUNE command
-                            let tci_cmd = if cmd.contains("ZZTU1") {
-                                "TUNE:0,true;"
-                            } else if cmd.contains("ZZTU0") {
-                                "TUNE:0,false;"
-                            } else {
-                                // Unknown tune command, pass through
-                                &cmd
-                            };
-                            debug!("Tuner TCI: {} -> {}", cmd.trim_end_matches(';'), tci_cmd.trim_end_matches(';'));
-                            ptt.lock().await.send_cat(tci_cmd).await;
+                            // `send_cat` translates ZZTU through `cat_to_tci`, the one
+                            // place that knows it.
+                            debug!("Tuner CAT: {}", cmd.trim_end_matches(';'));
+                            ptt.lock().await.send_cat(&cmd).await;
                         }
                         _ = pa_policy_tick.tick() => {
                             use crate::pa_policy::{self, Enforce, PA_RF2K, PA_SPE};
@@ -3339,6 +3413,7 @@ impl NetworkService {
                             let rx2_nf_enable = ptt_guard.rx2_nf_enable();
                             let rx_balance = ptt_guard.rx_balance();
                             let tune_drive = ptt_guard.tune_drive();
+                            let thetis_tune = ptt_guard.thetis_tune_on();
                             let mon_volume = ptt_guard.mon_volume();
                             let tx_profile_names: Vec<String> = ptt_guard.tx_profile_names().to_vec();
                             let tx_profile_name = ptt_guard.tx_profile_name().to_string();
@@ -3360,6 +3435,9 @@ impl NetworkService {
                             let step_att_enabled_rx2 = ptt_guard.step_att_enabled(1);
                             let ddc_rate_rx1 = ptt_guard.ddc_sample_rate(0);
                             let ddc_rate_rx2 = ptt_guard.ddc_sample_rate(1);
+                            // The calibration pauses for anything on the air, not
+                            // only for our own PTT: a TUNE is no `PttState::Tx`.
+                            let on_the_air = ptt_guard.tx_now().on_the_air();
                             drop(ptt_guard);
 
                             // Cache VFO freq for tuner stale check + DX cluster band filter
@@ -3385,47 +3463,52 @@ impl NetworkService {
                                 if freq != 0 { sp.set_vfo_freq(freq, ctun); }
                                 if dds_rx1 != 0 { sp.set_ddc_center(dds_rx1); }
 
-                                if !is_tx {
+                                if !on_the_air {
                                     if step_att_enabled_rx1 {
                                         // Direct: static_cal + ATT (stock .14 sends positive dB)
                                         sp.set_cal_offset_db(static_cal_rx1 + (step_att_rx1 as f32));
                                     } else if let Some(tci_dbm) = tci_smeter_dbm_rx1 {
-                                        // Fallback: auto-calibrate from S-meter vs raw spectrum
+                                        // Fallback: calibrate against the S-meter, from an empty passband only.
                                         let raw_dbm = sp.compute_raw_passband_power_dbm(filter_low, filter_high);
-                                        if raw_dbm > -130.0 && tci_dbm > -130.0 {
-                                            let dynamic = tci_dbm - raw_dbm - static_cal_rx1;
-                                            let cur_dynamic = sp.cal_offset_db() - static_cal_rx1;
-                                            let new_dynamic = cur_dynamic * 0.9 + dynamic * 0.1;
-                                            sp.set_cal_offset_db(static_cal_rx1 + new_dynamic);
-                                        } else {
-                                            let cur = sp.cal_offset_db();
-                                            if cur.abs() < 0.01 {
-                                                sp.set_cal_offset_db(static_cal_rx1);
-                                            }
+                                        let excess = sp.passband_excess_db(filter_low, filter_high);
+                                        let now = Instant::now();
+                                        let (offset, step) = crate::spectrum::calibrate_against_smeter(
+                                            static_cal_rx1, sp.cal_offset_db(), tci_dbm, raw_dbm, excess, &mut cal_signal_rx1, now,
+                                        );
+                                        sp.set_cal_offset_db(offset);
+                                        if let Some(line) = cal_watch_rx1.note(step, excess, tci_dbm, raw_dbm, offset, static_cal_rx1, now) {
+                                            dev_info!("{line}");
                                         }
                                     } else if sp.cal_offset_db().abs() < 0.01 {
                                         sp.set_cal_offset_db(static_cal_rx1);
                                     }
+                                } else {
+                                    crate::spectrum::hold_calibration_while_transmitting(&mut cal_signal_rx1, Instant::now());
+                                    cal_watch_rx1.note_on_the_air();
                                 }
                             }
 
                             // RX2 spectrum calibration
-                            if !is_tx {
+                            if !on_the_air {
                                 let mut rx2_sp = rx2_spectrum.lock().await;
                                 if step_att_enabled_rx2 {
                                     // Direct: static_cal + ATT (stock .14 sends positive dB)
                                     rx2_sp.set_cal_offset_db(static_cal_rx2 + (step_att_rx2 as f32));
                                 } else if let Some(tci_dbm) = tci_smeter_dbm_rx2 {
                                     let raw_dbm = rx2_sp.compute_raw_passband_power_dbm(rx2_filter_low, rx2_filter_high);
-                                    if raw_dbm > -130.0 && tci_dbm > -130.0 {
-                                        let dynamic = tci_dbm - raw_dbm - static_cal_rx2;
-                                        let cur_dynamic = rx2_sp.cal_offset_db() - static_cal_rx2;
-                                        let new_dynamic = cur_dynamic * 0.9 + dynamic * 0.1;
-                                        rx2_sp.set_cal_offset_db(static_cal_rx2 + new_dynamic);
-                                    } else if rx2_sp.cal_offset_db().abs() < 0.01 {
-                                        rx2_sp.set_cal_offset_db(static_cal_rx2);
+                                    let excess = rx2_sp.passband_excess_db(rx2_filter_low, rx2_filter_high);
+                                    let now = Instant::now();
+                                    let (offset, step) = crate::spectrum::calibrate_against_smeter(
+                                        static_cal_rx2, rx2_sp.cal_offset_db(), tci_dbm, raw_dbm, excess, &mut cal_signal_rx2, now,
+                                    );
+                                    rx2_sp.set_cal_offset_db(offset);
+                                    if let Some(line) = cal_watch_rx2.note(step, excess, tci_dbm, raw_dbm, offset, static_cal_rx2, now) {
+                                        dev_info!("{line}");
                                     }
                                 }
+                            } else {
+                                crate::spectrum::hold_calibration_while_transmitting(&mut cal_signal_rx2, Instant::now());
+                                cal_watch_rx2.note_on_the_air();
                             }
 
                             // S-meter: TCI values are already calibrated
@@ -3641,6 +3724,10 @@ impl NetworkService {
                                 (ControlId::ManualNotchFilter, nf_enable as u16),
                                 (ControlId::RxBalance, rx_balance as i16 as u16),
                                 (ControlId::TuneDrive, tune_drive as u16),
+                                // Whether Thetis tunes (2.13.3 build 1): the button of
+                                // a client that comes back, or of another client, showed
+                                // its own last press and not the carrier.
+                                (ControlId::ThetisTune, thetis_tune as u16),
                                 (ControlId::DdcSampleRateRx1, (ddc_rate_rx1 / 1000) as u16),
                                 (ControlId::DdcSampleRateRx2, (ddc_rate_rx2 / 1000) as u16),
                                 (ControlId::DdcCentreRx1, sdr_remote_core::protocol::ddc_centre_to_khz(ddc_centre_rx1)),
@@ -3858,9 +3945,9 @@ impl NetworkService {
         let (released_tx, mut released_rx) = tokio::sync::mpsc::unbounded_channel::<crate::tx_recover::ReleasePlayed>();
         let yaesu_tx_packet_tx = {
             let tx_audio_tx = yaesu.as_ref().and_then(|y| y.tx_audio_tx.clone());
-            let tx_rate = yaesu.as_ref().map(|y| y.tx_sample_rate).unwrap_or(0);
+            let tx_rate = yaesu.as_ref().map(|y| y.output_rate.clone());
             let timing = yaesu.as_ref().map(|y| y.status_arc().lock().unwrap().tx_timing.clone());
-            if let (Some(tx_audio), true) = (tx_audio_tx, tx_rate > 0) {
+            if let (Some(tx_audio), Some(tx_rate)) = (tx_audio_tx, tx_rate) {
                 let (pkt_tx, pkt_rx) = tokio::sync::mpsc::channel::<crate::tx_recover::TxPacket>(64);
                 // One task for both radios, with the jitter buffer and the gap
                 // rule Thetis's transmit audio has (build 166).
@@ -3875,9 +3962,9 @@ impl NetworkService {
         // fed by AudioYaesu2 -> yaesu2's tx_audio_tx.
         let yaesu2_tx_packet_tx = {
             let tx_audio_tx = yaesu2.as_ref().and_then(|y| y.tx_audio_tx.clone());
-            let tx_rate = yaesu2.as_ref().map(|y| y.tx_sample_rate).unwrap_or(0);
+            let tx_rate = yaesu2.as_ref().map(|y| y.output_rate.clone());
             let timing = yaesu2.as_ref().map(|y| y.status_arc().lock().unwrap().tx_timing.clone());
-            if let (Some(tx_audio), true) = (tx_audio_tx, tx_rate > 0) {
+            if let (Some(tx_audio), Some(tx_rate)) = (tx_audio_tx, tx_rate) {
                 let (pkt_tx, pkt_rx) = tokio::sync::mpsc::channel::<crate::tx_recover::TxPacket>(64);
                 // One task for both radios, with the jitter buffer and the gap
                 // rule Thetis's transmit audio has (build 166).
@@ -4576,8 +4663,10 @@ impl NetworkService {
                                         EquipmentCommandPacket::CMD_SET_SWITCH_A => {
                                             if let Some(ref amp) = self.amplitec {
                                                 if let Some(&pos) = eq_cmd.data.first() {
-                                                    info!("Amplitec: requesting Switch A -> {}", pos);
-                                                    amp.send_command(crate::amplitec::AmplitecCmd::SetSwitchA(pos));
+                                                    let p = self.ptt.lock().await;
+                                                    let on_the_air = p.tx_now().on_the_air();
+                                                    let rx_only = crate::config::load().amplitec_tx_blocked;
+                                                    amp.request_switch_a(pos, &rx_only, on_the_air, &p.tx_blocked_handle(), "client");
                                                 }
                                             }
                                         }
@@ -4830,6 +4919,9 @@ impl NetworkService {
                                 DeviceType::RemoteServer => {
                                     if eq_cmd.command_id == sdr_remote_core::protocol::CMD_SERVER_REBOOT {
                                         info!("Client requested remote reboot");
+                                        #[cfg(not(windows))]
+                                        log::warn!("Remote reboot not done: it is Windows-only (schtasks)");
+                                        #[cfg(windows)]
                                         std::thread::spawn(|| {
                                             match std::process::Command::new("C:\\Windows\\System32\\cmd.exe")
                                                 .args(["/c", "schtasks", "/run", "/tn", "ThetisLinkReboot"])
@@ -4845,6 +4937,9 @@ impl NetworkService {
                                         });
                                     } else if eq_cmd.command_id == sdr_remote_core::protocol::CMD_SERVER_SHUTDOWN {
                                         info!("Client requested remote shutdown");
+                                        #[cfg(not(windows))]
+                                        log::warn!("Remote shutdown not done: it is Windows-only (shutdown.exe)");
+                                        #[cfg(windows)]
                                         std::thread::spawn(|| {
                                             match std::process::Command::new("C:\\Windows\\System32\\shutdown.exe")
                                                 .args(["/s", "/t", "5", "/f"])
@@ -5210,13 +5305,8 @@ impl NetworkService {
                             match ctrl.control_id {
                                 ControlId::Rx1AfGain => {
                                     let val = ctrl.value.min(100);
-                                    // rx_volume via TCI (stock v2.10.3.13+).
-                                    // Scale: 0..100 % -> -60..0 dB (matches parser in tci.rs RxVolume handler).
-                                    let db = ((val as i32 - 100) * 60) / 100;
-                                    let cmd = format!("rx_volume:0,0,{};", db);
-                                    ptt.send_cat(&cmd).await;
-                                    // No optimistic state update - Thetis echoes rx_volume back
-                                    // and the parser updates rx_af_gain via the notification path.
+                                    // rx_volume via TCI; Thetis echoes it back.
+                                    ptt.set_rx_af_gain(0, val as u8, addr.to_string()).await;
                                 }
                                 ControlId::PowerOnOff => {
                                     if ctrl.value == 2 {
@@ -5372,7 +5462,7 @@ impl NetworkService {
                                 }
                                 ControlId::Rx2AfGain => {
                                     let val = ctrl.value.min(100);
-                                    ptt.set_rx2_af_gain(val as u8).await;
+                                    ptt.set_rx_af_gain(1, val as u8, addr.to_string()).await;
                                 }
                                 ControlId::Rx2SpectrumEnable => {
                                     let enabled = ctrl.value != 0;
@@ -5548,7 +5638,7 @@ impl NetworkService {
                                 ControlId::ThetisTune => {
                                     let on = ctrl.value != 0;
                                     ctrl_log!(opening, "Client {} Thetis TUNE {}", addr, if on { "ON" } else { "OFF" });
-                                    ptt.set_tune(on).await;
+                                    ptt.client_tune(addr, on).await;
                                 }
                                 ControlId::DiversityRead => {
                                     ctrl_log!(opening, "Client {} reading diversity state", addr);

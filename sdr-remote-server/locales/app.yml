@@ -410,10 +410,10 @@ srv_autostart:
   de: "Beim Start automatisch starten"
   fr: "Démarrage automatique au lancement"
 srv_line_ptt:
-  en: "transmits when Windows raises RTS or DTR of its USB port (at start-up, for example): %{menus}. ThetisLink keys by CAT and does not need these: set them to DAKY (FT-991A; 060 PC KEYING: OFF) or OFF (FTX-1)."
-  nl: "zendt als Windows RTS of DTR van de USB-poort hoog zet (bijvoorbeeld bij het opstarten): %{menus}. ThetisLink schakelt via CAT en heeft deze niet nodig: zet ze op DAKY (FT-991A; 060 PC KEYING: OFF) of OFF (FTX-1)."
-  de: "sendet, wenn Windows RTS oder DTR des USB-Ports setzt (zum Beispiel beim Start): %{menus}. ThetisLink tastet per CAT und braucht diese nicht: auf DAKY (FT-991A; 060 PC KEYING: OFF) oder OFF (FTX-1) stellen."
-  fr: "émet quand Windows active RTS ou DTR de son port USB (au démarrage, par exemple) : %{menus}. ThetisLink commute par CAT et n'en a pas besoin : réglez-les sur DAKY (FT-991A; 060 PC KEYING: OFF) ou OFF (FTX-1)."
+  en: "transmits when the PC raises RTS or DTR of its USB port (when it starts or opens the port, for example): %{menus}. ThetisLink keys by CAT and does not need these: set them to DAKY (FT-991A; 060 PC KEYING: OFF) or OFF (FTX-1)."
+  nl: "zendt als de pc RTS of DTR van de USB-poort hoog zet (bijvoorbeeld bij het opstarten of bij het openen van de poort): %{menus}. ThetisLink schakelt via CAT en heeft deze niet nodig: zet ze op DAKY (FT-991A; 060 PC KEYING: OFF) of OFF (FTX-1)."
+  de: "sendet, wenn der PC RTS oder DTR des USB-Ports setzt (zum Beispiel beim Start oder beim Öffnen des Ports): %{menus}. ThetisLink tastet per CAT und braucht diese nicht: auf DAKY (FT-991A; 060 PC KEYING: OFF) oder OFF (FTX-1) stellen."
+  fr: "émet quand le PC active RTS ou DTR de son port USB (au démarrage ou à l'ouverture du port, par exemple) : %{menus}. ThetisLink commute par CAT et n'en a pas besoin : réglez-les sur DAKY (FT-991A; 060 PC KEYING: OFF) ou OFF (FTX-1)."
 srv_dev_code:
   en: "Code"
   nl: "Code"

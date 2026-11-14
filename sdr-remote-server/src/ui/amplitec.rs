@@ -264,7 +264,9 @@ pub(super) fn render_amplitec_panel(
             };
             let resp = antenna_button(ui, status.connected, pos, label, state, max_btn_w);
             if resp.clicked() {
-                amplitec.send_command(crate::amplitec::AmplitecCmd::SetSwitchA(pos));
+                // Through the same request as a client's: an RX-only position
+                // waits for the block (`AmplitecSwitch::request_switch_a`).
+                amplitec.ask_from_screen(pos);
             }
             let resp = if is_blocked {
                 resp.on_hover_text(rust_i18n::t!("srv_ant_busy_b", pos = pos, label = label).to_string())

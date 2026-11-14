@@ -154,8 +154,8 @@ pub(super) fn yaesu_reconnect_thread(
             // Drop old audio streams (only meaningful after a successful connect -
             // during cold-start retries there is nothing to drop).
             if ever_connected {
-                capture_stream.set(None);
-                output_stream.set(None);
+                capture_stream.close();
+                output_stream.close();
                 *tx_producer.lock().unwrap() = None;
             }
 
@@ -397,8 +397,8 @@ pub(super) fn yaesu_reconnect_thread(
 
             let capture_channel = effective_capture_channel(model, &status);
             match build_capture_stream(dev, rx_audio_tx.clone(), last_audio_time.clone(), &prefix, capture_channel) {
-                Ok((stream, _rate)) => {
-                    capture_stream.set(Some(stream));
+                Ok((stream, rate)) => {
+                    capture_stream.opened(stream, rate);
                     info!("{} audio capture reconnected", prefix);
                 }
                 Err(e) => warn!("{} audio capture reconnect failed: {}", prefix, e),
@@ -414,8 +414,8 @@ pub(super) fn yaesu_reconnect_thread(
                 // The sound card counts its gaps for the radio's over line (build 263).
                 let gaps = timing_of(&status).output_gaps();
                 match build_output_stream(out_dev, tx_producer.clone(), gaps, &prefix) {
-                    Ok((stream, _rate)) => {
-                        output_stream.set(Some(stream));
+                    Ok((stream, rate)) => {
+                        output_stream.opened(stream, rate);
                         if attempt == 1 {
                             info!("{} audio output reconnected", prefix);
                         } else {
@@ -434,7 +434,14 @@ pub(super) fn yaesu_reconnect_thread(
                     }
                 }
             }
-            if !output_ok {
+            if !output_ok && output_stream.is_set() {
+                // The stream opened at the start stays; on Linux the card is
+                // held by it, so a second open cannot find it.
+                warn!(
+                    "{} audio output reopen failed after 5 attempts: {}; the stream that is open stays",
+                    prefix, last_err.unwrap_or_else(|| "unknown".to_string())
+                );
+            } else if !output_ok {
                 warn!(
                     "{} audio output open failed after 5 attempts: {}; keeps retrying in the background every 5s until the device is free",
                     prefix, last_err.unwrap_or_else(|| "unknown".to_string())
@@ -1817,8 +1824,8 @@ fn yaesu_poll_loop(
                         last_audio_time.store(future_ms, std::sync::atomic::Ordering::Relaxed);
                         let capture_channel = effective_capture_channel(model, &status);
                         match build_capture_stream(dev, rx_audio_tx.clone(), last_audio_time.clone(), prefix, capture_channel) {
-                            Ok((stream, _rate)) => {
-                                capture_stream.set(Some(stream));
+                            Ok((stream, rate)) => {
+                                capture_stream.opened(stream, rate);
                                 info!("{} audio capture rebuilt by watchdog", prefix);
                             }
                             Err(e) => warn!("{} audio watchdog capture failed: {}", prefix, e),
@@ -1827,8 +1834,8 @@ fn yaesu_poll_loop(
                         // The sound card counts its gaps for the radio's over line (build 263).
                         let gaps = timing_of(status).output_gaps();
                         match build_output_stream(out_dev, tx_producer.clone(), gaps, prefix) {
-                            Ok((stream, _rate)) => {
-                                output_stream.set(Some(stream));
+                            Ok((stream, rate)) => {
+                                output_stream.opened(stream, rate);
                                 info!("{} audio output rebuilt by watchdog", prefix);
                             }
                             Err(e) => warn!("{} audio watchdog output failed: {}", prefix, e),
@@ -1850,8 +1857,8 @@ fn yaesu_poll_loop(
                 // The sound card counts its gaps for the radio's over line (build 263).
                 let gaps = timing_of(status).output_gaps();
                 match build_output_stream(out_dev, tx_producer.clone(), gaps, prefix) {
-                    Ok((stream, _rate)) => {
-                        output_stream.set(Some(stream));
+                    Ok((stream, rate)) => {
+                        output_stream.opened(stream, rate);
                         info!("{} audio output recovered (device free)", prefix);
                         output_failure_reported = false;
                     }

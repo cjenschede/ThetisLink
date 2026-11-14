@@ -1,12 +1,12 @@
-# ThetisLink v2.13.2: Technische Referentie
+# ThetisLink v2.14.0: Technische Referentie
 
 ## 1. Overzicht
 
 ThetisLink is een systeem voor het op afstand bedienen van een Thetis SDR-ontvanger (welke radio Thetis ook bedient, bereikt via TCI en nooit rechtstreeks aangesproken) en van maximaal twee rechtstreeks op de server aangesloten Yaesu transceivers (FT-991A / FTX-1), via een netwerkverbinding. Wat een radio biedt is wat Thetis daarvoor biedt: RX2 en diversity vragen een tweede ontvanger, en de spectrumbreedte volgt de samplerate die de radio kan leveren. Het biedt bidirectionele real-time audio streaming, PTT-bediening, DDC spectrum/waterfall display, volledige RX2/VFO-B ondersteuning, diversity, Yaesu memory channel management en radio settings editor over één versleutelde QUIC-verbinding met Opus codec.
 
-**Versie:** v2.13.2 (gedeeld versienummer in `sdr-remote-core::VERSION`)
+**Versie:** v2.14.0 (gedeeld versienummer in `sdr-remote-core::VERSION`)
 **Ontwikkeltaal:** Rust + Kotlin (Android UI)
-**Doelplatform:** Windows 10/11 en Android 8+ (arm64); macOS (Intel/Apple Silicon) vanaf broncode, experimenteel
+**Doelplatform:** Windows 10/11 en Android 8+ (arm64); macOS (Intel/Apple Silicon) vanaf broncode, experimenteel; Linux (server en desktopclient) vanaf broncode, in ontwikkeling
 **Ontwerpprioriteit:** latency > bandbreedte > features
 
 ### Thetis compatibiliteit
@@ -26,9 +26,27 @@ Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Setu
 De standaard IQ sample rate is 384 kHz. Met ThetisLink extensions kan de gebruiker kiezen uit: 48, 96, 192, 384, 768 of **1536 kHz**, selecteerbaar per receiver via de DDC sample rate dropdown in de client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.13.2`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (publieke release repo, tag `v2.14.0`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Origineel Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.14.0 hoogtepunten
+
+**Een TUNE die met zijn client uitgaat.** Een TUNE die een client startte, gaat uit als die client weggaat of zijn
+link verliest; een TUNE telt pas als de onze als hij aan Thetis is doorgegeven. De TUNE-knop van desktop en telefoon is
+één toestandsmachine (`sdr_remote_logic::tune_button`) en toont wat Thetis doet; een PA die voor de tune in standby
+ging, komt pas terug na een einde dat de server bevestigde. Op een RX-only Amplitec-positie weigert de TCI-verzending
+elke opdracht die de zender inschakelt, langs welke weg ook.
+
+**Het volume op de schaal van Thetis.** De procent is de stand van Thetis (een lineaire versterking), via TCI als
+`20*log10` ervan met een kwart stap erbij, 0 % is -60 dB (`volume_to_db`/`volume_from_db` in de server). 0 % is een echte waarde op beide schermen.
+Het volume van Thetis' sub-ontvanger (`rx_volume:<r>,1`) telt niet als dat van RX1.
+
+**Geluid en spectrum.** Een geluidskaart opent in haar eigen sampleformaat (`audio_stream`); een Yaesu die na de server
+aangaat, volgt de rate waarop zijn kaart opende. De ijking van het spectrum tegen het S-meter leert alleen van een lege
+doorlaat. **Linux:** de server en de desktopclient bouwen en draaien op Linux, alleen vanuit de broncode en in
+ontwikkeling; de server werkt daar samen met hpsdr-rs als TCI-bron.
+Niets veranderd op de draad; een 2.14.0-programma praat met een van 2.13.1 en 2.13.2.
 
 ### v2.13.2 hoogtepunten
 
@@ -3139,4 +3157,4 @@ De chat staat achter het compose-profiel `chat`: de dienst bij naam noemen, zoal
 
 9. **Relaymeldingen op de telefoon:** de app toont de relaystatus niet; de desktop toont hem op het verbindscherm, de server als zweeftekst in het statuspaneel.
 
-10. **TUNE op een RX-only-antennepositie:** een TUNE vanaf een client wordt binnen 200 ms gestopt, niet vooraf geweigerd.
+10. **TUNE op een RX-only-antennepositie:** ThetisLink weigert een TUNE vanaf een client vooraf; hij bereikt de radiosoftware niet. Wat overblijft: een TUNE of MOX aan de radio-pc bij radiosoftware zonder eigen receive-only wordt pas achteraf gestopt, en een Yaesu hangt niet aan de Amplitec.

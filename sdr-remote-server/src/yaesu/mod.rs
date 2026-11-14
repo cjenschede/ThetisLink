@@ -13,7 +13,8 @@ mod memory;
 use memory::*;
 mod audio;
 use audio::{build_capture_stream, build_output_stream};
-pub use audio::{available_audio_inputs, available_audio_outputs};
+pub use audio::{available_audio_inputs, available_audio_outputs, OpenRate, RateFollower};
+use audio::StreamHolder;
 mod cat;
 use cat::*;
 mod ex_menu;
@@ -171,7 +172,7 @@ pub fn log_input_devices() {
                 let names: Vec<String> = devs.iter().filter_map(|d| d.name().ok()).collect();
                 if names.is_empty() {
                     empty += 1;
-                    warn!("NO audio {} devices at all: Windows hands out an empty list", kind);
+                    warn!("NO audio {} devices at all: {}", kind, audio::NO_DEVICES);
                 } else {
                     info!("Available audio {} devices ({}): {:?}", kind, names.len(), names);
                 }
@@ -183,9 +184,7 @@ pub fn log_input_devices() {
     // Said once, loudly, where it is read: with no devices at all, every later
     // "cannot find device X" is a consequence and not the fault.
     if empty > 0 {
-        warn!(
-            "The machine has no sound cards to offer. The usual cause is a Remote Desktop              session: while one is connected it takes them out of the session. Disconnect it,              or set its audio to play on the remote computer, and restart the server: this              list is only read at startup."
-        );
+        warn!("The machine has no sound cards to offer. {}.", audio::NO_DEVICES_CAUSE);
     }
 }
 
@@ -385,11 +384,13 @@ pub struct YaesuRadio {
     /// The receiver is taken once by the network audio loop and stays valid forever.
     _rx_audio_tx_keepalive: tokio::sync::mpsc::Sender<Vec<f32>>,
     pub audio_rx: Mutex<Option<tokio::sync::mpsc::Receiver<Vec<f32>>>>,
-    pub audio_sample_rate: u32,
+    /// The rate the capture opened at; the receive loop follows it.
+    pub capture_rate: OpenRate,
     /// Persistent TX audio sender - used by the network TX decode task.
     /// The receiver is consumed by the output bridge thread.
     pub tx_audio_tx: Option<tokio::sync::mpsc::Sender<Vec<f32>>>,
-    pub tx_sample_rate: u32,
+    /// The rate the output opened at; the transmit task and the bridge follow it.
+    pub output_rate: OpenRate,
     /// Swappable cpal streams (replaced on reconnect)
     _capture_stream: Arc<StreamHolder>,
     _output_stream: Arc<StreamHolder>,
@@ -425,24 +426,6 @@ pub struct YaesuRadio {
 impl Drop for YaesuRadio {
     fn drop(&mut self) {
         self.alive.store(false, std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-/// Thread-safe holder for a cpal::Stream that can be swapped on reconnect.
-struct StreamHolder(Mutex<Option<cpal::Stream>>);
-// SAFETY: cpal::Stream on Windows (WASAPI) uses COM handles safe to move between threads.
-unsafe impl Send for StreamHolder {}
-unsafe impl Sync for StreamHolder {}
-
-impl StreamHolder {
-    fn new(stream: Option<cpal::Stream>) -> Self {
-        Self(Mutex::new(stream))
-    }
-    fn set(&self, stream: Option<cpal::Stream>) {
-        *self.0.lock().unwrap() = stream;
-    }
-    fn is_set(&self) -> bool {
-        self.0.lock().unwrap().is_some()
     }
 }
 
@@ -1370,27 +1353,18 @@ impl YaesuRadio {
         let (tx_audio_tx, tx_audio_rx) = tokio::sync::mpsc::channel::<Vec<f32>>(64);
 
         // Swappable cpal streams and ring buffer producer
-        let capture_stream = Arc::new(StreamHolder::new(None));
-        let output_stream = Arc::new(StreamHolder::new(None));
+        // Until a stream opens, the rate is 48000 Hz: the loops that start
+        // below need one that is not 0 (`frame_samples = 0`, a resampler
+        // ratio divided by zero). The card may open at another rate, now or
+        // when the radio is switched on later; the loops follow it then.
+        let capture_stream = Arc::new(StreamHolder::new(OpenRate::new(48_000)));
+        let output_stream = Arc::new(StreamHolder::new(OpenRate::new(48_000)));
         let tx_producer: Arc<Mutex<Option<ringbuf::HeapProd<f32>>>> = Arc::new(Mutex::new(None));
         let last_audio_time = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let memory_data: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let menu_data: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         // Initial audio setup.
-        //
-        // Default rate is 48000 Hz because the Yaesu FT-991A USB Audio CODEC
-        // always delivers that (input 48kHz/F32/1ch, output 48kHz/F32/2ch).
-        // On cold-start (Yaesu off) the build_capture/output_stream below
-        // fails and we stay on default 48000. That is needed so
-        // the once-started `yaesu_audio_loop` (RX direction) and the
-        // TX resampler in network.rs initialize with a valid sample rate
-        // - not with 0, which leads to `frame_samples = 0` and a
-        // divide-by-zero resampler ratio. Later reconnect
-        // builds of the cpal streams always use 48000 so it
-        // matches.
-        let mut audio_rate = 48_000u32;
-        let mut tx_rate = 48_000u32;
         if let Some(dev) = audio_device {
             // Capture (RX from Yaesu)
             // Seed audio timestamp so watchdog can detect if stream never starts
@@ -1399,10 +1373,7 @@ impl YaesuRadio {
             last_audio_time.store(seed_ms, std::sync::atomic::Ordering::Relaxed);
             let capture_channel = crate::yaesu::poll::effective_capture_channel(model, &status);
             match build_capture_stream(dev, rx_audio_tx.clone(), last_audio_time.clone(), &prefix, capture_channel) {
-                Ok((stream, rate)) => {
-                    capture_stream.set(Some(stream));
-                    audio_rate = rate;
-                }
+                Ok((stream, rate)) => capture_stream.opened(stream, rate),
                 Err(e) => warn!("{} audio capture init failed: {}", prefix, e),
             }
             // Output (TX to Yaesu) - separate output device if configured, else the
@@ -1411,10 +1382,7 @@ impl YaesuRadio {
             // The sound card counts its gaps for the radio's over line (build 263).
             let gaps = status.lock().unwrap().tx_timing.output_gaps();
             match build_output_stream(out_dev, tx_producer.clone(), gaps, &prefix) {
-                Ok((stream, rate)) => {
-                    output_stream.set(Some(stream));
-                    tx_rate = rate;
-                }
+                Ok((stream, rate)) => output_stream.opened(stream, rate),
                 Err(e) => warn!("{} audio output init failed: {}", prefix, e),
             }
         }
@@ -1426,7 +1394,7 @@ impl YaesuRadio {
             let prefix_tx = prefix.clone();
             // Transmit audio waits for TX1 (build 164, `tx_timing::Hold`).
             let timing = status.lock().unwrap().tx_timing.clone();
-            let hold_max = (tx_rate as u64 * tx_timing::HOLD_MAX_MS / 1000) as usize;
+            let output_rate = output_stream.rate();
             let mut hold = tx_timing::Hold::default();
             let mut unwritten = tx_timing::OverTally::default();
             let mut over_output = tx_timing::OverOutput::default();
@@ -1441,6 +1409,9 @@ impl YaesuRadio {
                 };
                 rt.block_on(async {
                     while let Some(samples) = rx.recv().await {
+                        // The rate the card plays at now: it can open later, at its own.
+                        let tx_rate = output_rate.get();
+                        let hold_max = (tx_rate as u64 * tx_timing::HOLD_MAX_MS / 1000) as usize;
                         let taken = hold.take(samples, timing.keyed(), timing.over(), hold_max);
                         if let Some(n) = hold.take_report() {
                             info!(
@@ -1555,9 +1526,9 @@ impl YaesuRadio {
             status,
             _rx_audio_tx_keepalive: rx_audio_tx,
             audio_rx: Mutex::new(Some(rx_audio_rx)),
-            audio_sample_rate: audio_rate,
+            capture_rate: capture_stream.rate(),
             tx_audio_tx: Some(tx_audio_tx),
-            tx_sample_rate: tx_rate,
+            output_rate: output_stream.rate(),
             _capture_stream: capture_stream,
             _output_stream: output_stream,
             _last_audio_time: last_audio_time,

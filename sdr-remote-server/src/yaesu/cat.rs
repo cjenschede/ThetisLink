@@ -279,12 +279,3 @@ pub(super) fn resp_payload(cmd: &str, resp: &str) -> String {
     let t = resp.trim().trim_end_matches(';');
     t.strip_prefix(cmd).unwrap_or(t).to_string()
 }
-
-#[allow(dead_code)] // helper for UI port-picker; not yet used by config flow
-pub fn available_ports() -> Vec<String> {
-    serialport::available_ports()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|p| p.port_name)
-        .collect()
-}

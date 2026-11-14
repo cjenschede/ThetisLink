@@ -819,7 +819,7 @@ impl SdrRemoteApp {
             };
             // Fallback to RX1 filter values if RX2 filter not available (ZZRL/ZZRH unsupported)
             let rx2_has_filter = self.rx2_filter_low_hz != 0 || self.rx2_filter_high_hz != 0;
-            let mut texture = self.rx2_waterfall.texture.take();
+            let mut texture = std::mem::take(&mut self.rx2_waterfall.texture);
             let panel = super::spectrum::SpectrumPanel {
                 id: "rx2",
                 bins: rx2_plot_bins,

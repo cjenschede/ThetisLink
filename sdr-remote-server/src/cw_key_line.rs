@@ -25,10 +25,10 @@ pub struct PortDesc {
     pub usb: Option<(u16, u16, Option<String>)>,
 }
 
-/// Every COM port on this machine, as `PortDesc`.
+/// Every COM port on this machine, as `PortDesc`, under the name that stays
+/// (`serial_ports`).
 pub fn ports_now() -> Vec<PortDesc> {
-    serialport::available_ports()
-        .unwrap_or_default()
+    crate::serial_ports::list()
         .into_iter()
         .map(|p| PortDesc {
             name: p.port_name,
@@ -45,12 +45,14 @@ pub fn ports_now() -> Vec<PortDesc> {
 /// serial number, when Windows reports one for both, must match too. If
 /// more than one port fits (two radios of the same model), or none does,
 /// there is no answer - guessing a port here could key the wrong radio.
+/// The CAT port is found under either of its names (`serial_ports::same`): a
+/// conf can hold the name that stays while the list has it too, or the other way.
 pub fn sibling_port(ports: &[PortDesc], cat: &str) -> Option<String> {
-    let cat_desc = ports.iter().find(|p| p.name.eq_ignore_ascii_case(cat))?;
+    let cat_desc = ports.iter().find(|p| crate::serial_ports::same(&p.name, cat))?;
     let (vid, pid, serial) = cat_desc.usb.clone()?;
     let same_device: Vec<&PortDesc> = ports
         .iter()
-        .filter(|p| !p.name.eq_ignore_ascii_case(cat))
+        .filter(|p| !crate::serial_ports::same(&p.name, &cat_desc.name))
         .filter(|p| match &p.usb {
             Some((v, d, s)) => *v == vid && *d == pid && (serial.is_none() || s.is_none() || *s == serial),
             None => false,
@@ -217,8 +219,32 @@ mod tests {
             PortDesc { name: "COM1".into(), usb: None },
         ];
         assert_eq!(sibling_port(&ports, "COM13").as_deref(), Some("COM12"));
+        #[cfg(windows)]
         assert_eq!(sibling_port(&ports, "com13").as_deref(), Some("COM12"), "Windows port names are not case-sensitive");
         assert_eq!(sibling_port(&ports, "COM12").as_deref(), Some("COM13"));
+    }
+
+    /// Linux, the two ports of the FT-991A under the names that stay, and a
+    /// CAT port given under the kernel's name it has today (or the other way):
+    /// the key port is still the other interface of the same device.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_key_port_is_found_under_either_name_of_the_cat_port() {
+        let tmp = crate::serial_ports::TestDir::new("key-port");
+        let dir = &tmp.0;
+        let (cat_dev, key_dev) = (dir.join("ttyUSB4"), dir.join("ttyUSB5"));
+        std::fs::write(&cat_dev, b"").unwrap();
+        std::fs::write(&key_dev, b"").unwrap();
+        let (cat_link, key_link) = (dir.join("usb-CP2105_008DE7E0-if00-port0"), dir.join("usb-CP2105_008DE7E0-if01-port0"));
+        std::os::unix::fs::symlink(&cat_dev, &cat_link).unwrap();
+        std::os::unix::fs::symlink(&key_dev, &key_link).unwrap();
+        let s = |p: &std::path::Path| p.to_str().unwrap().to_string();
+        let ports = vec![
+            usb(&s(&cat_link), 0x10C4, 0xEA70, Some("008DE7E0")),
+            usb(&s(&key_link), 0x10C4, 0xEA70, Some("008DE7E0")),
+        ];
+        assert_eq!(sibling_port(&ports, &s(&cat_link)), Some(s(&key_link)), "the conf holds the name that stays");
+        assert_eq!(sibling_port(&ports, &s(&cat_dev)), Some(s(&key_link)), "the conf holds the kernel's name");
     }
 
     /// A real server PC, 2026-09-18 (`yaesu-key-test list`): the

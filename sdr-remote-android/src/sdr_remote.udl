@@ -55,6 +55,12 @@ namespace sdr_remote {
     f32 yaesu_mic_gain_from_db(f32 db);
 };
 
+dictionary BridgeTuneButton {
+    boolean shown;
+    boolean waiting;
+    boolean can_press;
+};
+
 dictionary BridgeFilterEdges {
     i32 low_hz;
     i32 high_hz;
@@ -274,6 +280,7 @@ dictionary BridgeRadioState {
     u16 diversity_autonull_result;
     u8 drive_level;
     u8 rx_af_gain;
+    boolean rx_volume_synced;
     boolean agc_enabled;
     boolean server_build_differs;
     string server_build;
@@ -294,6 +301,8 @@ dictionary BridgeRadioState {
     i32 filter_high_hz;
     boolean thetis_configured;
     boolean thetis_starting;
+    boolean thetis_tune;
+    boolean thetis_tune_known;
     boolean thetis_not_running;
     sequence<string> tx_profile_names;
     sequence<u8> spectrum_bins;
@@ -446,6 +455,12 @@ interface SdrBridge {
     void connect(string addr, string password);
     void send_totp_code(string code);
     void disconnect();
+    // The Thetis TUNE button with its PA bypass, the desktop's machine
+    // (sdr_remote_logic::tune_button, 2.13.3 build 4). The bridge holds it, so
+    // it lives as long as the app and not as long as the screen.
+    void thetis_tune_press();
+    void thetis_tune_tick();
+    BridgeTuneButton thetis_tune_button();
     void set_language(string lang);
     void chat_dismiss_answer(i64 id);
     sequence<i64> chat_seen_ids();

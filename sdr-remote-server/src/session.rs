@@ -1025,6 +1025,13 @@ impl SessionManager {
         released
     }
 
+    /// How long `addr` has been silent at `now`: any packet counts (`touch`).
+    /// `None` when it is no client any more: it said goodbye, timed out, or
+    /// its connection closed.
+    pub fn silence_of(&self, addr: SocketAddr, now: Instant) -> Option<std::time::Duration> {
+        self.clients.get(&addr).map(|c| now.saturating_duration_since(c.last_seen))
+    }
+
     /// Check if a session is active and authenticated
     fn is_active_authed(s: &ClientSession) -> bool {
         // `false` for the code step on purpose: the match below excludes it, so
@@ -2505,6 +2512,28 @@ mod holder_timeout_tests {
         let gone = m.check_timeout();
         assert_eq!(gone, vec![a(1)], "the holder is gone after four seconds");
         assert_eq!(m.tx_holder(TxTarget::Yaesu1), None, "and the transmitter is free");
+    }
+
+    /// What the TUNE safety asks (2.13.3 build 1): the silence counts from the
+    /// last packet, and is "gone" once the client said goodbye or timed out,
+    /// which turns the TUNE off within one safety tick.
+    #[test]
+    fn silence_of_counts_from_the_last_packet_and_ends_with_the_session() {
+        use std::time::{Duration, Instant};
+        let mut m = SessionManager::new(None, None);
+        assert_eq!(m.silence_of(a(1), Instant::now()), None, "never a client");
+        m.touch(a(1));
+        silent_for(&mut m, a(1), 3);
+        assert!(m.silence_of(a(1), Instant::now()).expect("a client") >= Duration::from_secs(3));
+        m.touch(a(1));
+        assert!(m.silence_of(a(1), Instant::now()).unwrap() < Duration::from_secs(1), "a packet ends the silence");
+        m.remove(a(1));
+        assert_eq!(m.silence_of(a(1), Instant::now()), None, "gone after a goodbye");
+
+        m.touch(a(2));
+        silent_for(&mut m, a(2), SESSION_TIMEOUT_SECS + 1);
+        assert_eq!(m.check_timeout(), vec![a(2)]);
+        assert_eq!(m.silence_of(a(2), Instant::now()), None, "gone after the time-out");
     }
 
     /// The trial client (build 256): let in as authenticated once, asking

@@ -1054,6 +1054,12 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -1298,6 +1304,12 @@ internal interface UniffiLib : Library {
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_spe_power_on(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_spe_tune(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_sdrbridge_thetis_tune_button(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_sdr_remote_android_fn_method_sdrbridge_thetis_tune_press(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_sdr_remote_android_fn_method_sdrbridge_thetis_tune_tick(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_sdr_remote_android_fn_method_sdrbridge_tuner_abort(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
@@ -1783,6 +1795,12 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_spe_tune(
     ): Short
+    fun uniffi_sdr_remote_android_checksum_method_sdrbridge_thetis_tune_button(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_sdrbridge_thetis_tune_press(
+    ): Short
+    fun uniffi_sdr_remote_android_checksum_method_sdrbridge_thetis_tune_tick(
+    ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_tuner_abort(
     ): Short
     fun uniffi_sdr_remote_android_checksum_method_sdrbridge_tuner_tune(
@@ -2257,6 +2275,15 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_spe_tune() != 38683.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_thetis_tune_button() != 41512.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_thetis_tune_press() != 58012.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_thetis_tune_tick() != 5093.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_sdr_remote_android_checksum_method_sdrbridge_tuner_abort() != 5653.toShort()) {
@@ -3720,6 +3747,12 @@ public interface SdrBridgeInterface {
 
     fun `speTune`()
 
+    fun `thetisTuneButton`(): BridgeTuneButton
+
+    fun `thetisTunePress`()
+
+    fun `thetisTuneTick`()
+
     fun `tunerAbort`()
 
     fun `tunerTune`()
@@ -4833,6 +4866,40 @@ open class SdrBridge: Disposable, AutoCloseable, SdrBridgeInterface {
 
 
 
+    override fun `thetisTuneButton`(): BridgeTuneButton {
+            return FfiConverterTypeBridgeTuneButton.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_sdrbridge_thetis_tune_button(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+    override fun `thetisTunePress`()
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_sdrbridge_thetis_tune_press(
+        it, _status)
+}
+    }
+
+
+
+    override fun `thetisTuneTick`()
+        =
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_sdr_remote_android_fn_method_sdrbridge_thetis_tune_tick(
+        it, _status)
+}
+    }
+
+
+
     override fun `tunerAbort`()
         =
     callWithPointer {
@@ -5561,6 +5628,7 @@ data class BridgeRadioState (
     var `diversityAutonullResult`: kotlin.UShort,
     var `driveLevel`: kotlin.UByte,
     var `rxAfGain`: kotlin.UByte,
+    var `rxVolumeSynced`: kotlin.Boolean,
     var `agcEnabled`: kotlin.Boolean,
     var `serverBuildDiffers`: kotlin.Boolean,
     var `serverBuild`: kotlin.String,
@@ -5580,6 +5648,8 @@ data class BridgeRadioState (
     var `filterHighHz`: kotlin.Int,
     var `thetisConfigured`: kotlin.Boolean,
     var `thetisStarting`: kotlin.Boolean,
+    var `thetisTune`: kotlin.Boolean,
+    var `thetisTuneKnown`: kotlin.Boolean,
     var `thetisNotRunning`: kotlin.Boolean,
     var `txProfileNames`: List<kotlin.String>,
     var `spectrumBins`: List<kotlin.UByte>,
@@ -5787,6 +5857,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterUByte.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
@@ -5802,6 +5873,8 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterBoolean.read(buf),
             FfiConverterInt.read(buf),
             FfiConverterInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -6002,6 +6075,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterUShort.allocationSize(value.`diversityAutonullResult`) +
             FfiConverterUByte.allocationSize(value.`driveLevel`) +
             FfiConverterUByte.allocationSize(value.`rxAfGain`) +
+            FfiConverterBoolean.allocationSize(value.`rxVolumeSynced`) +
             FfiConverterBoolean.allocationSize(value.`agcEnabled`) +
             FfiConverterBoolean.allocationSize(value.`serverBuildDiffers`) +
             FfiConverterString.allocationSize(value.`serverBuild`) +
@@ -6021,6 +6095,8 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterInt.allocationSize(value.`filterHighHz`) +
             FfiConverterBoolean.allocationSize(value.`thetisConfigured`) +
             FfiConverterBoolean.allocationSize(value.`thetisStarting`) +
+            FfiConverterBoolean.allocationSize(value.`thetisTune`) +
+            FfiConverterBoolean.allocationSize(value.`thetisTuneKnown`) +
             FfiConverterBoolean.allocationSize(value.`thetisNotRunning`) +
             FfiConverterSequenceString.allocationSize(value.`txProfileNames`) +
             FfiConverterSequenceUByte.allocationSize(value.`spectrumBins`) +
@@ -6218,6 +6294,7 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterUShort.write(value.`diversityAutonullResult`, buf)
             FfiConverterUByte.write(value.`driveLevel`, buf)
             FfiConverterUByte.write(value.`rxAfGain`, buf)
+            FfiConverterBoolean.write(value.`rxVolumeSynced`, buf)
             FfiConverterBoolean.write(value.`agcEnabled`, buf)
             FfiConverterBoolean.write(value.`serverBuildDiffers`, buf)
             FfiConverterString.write(value.`serverBuild`, buf)
@@ -6237,6 +6314,8 @@ public object FfiConverterTypeBridgeRadioState: FfiConverterRustBuffer<BridgeRad
             FfiConverterInt.write(value.`filterHighHz`, buf)
             FfiConverterBoolean.write(value.`thetisConfigured`, buf)
             FfiConverterBoolean.write(value.`thetisStarting`, buf)
+            FfiConverterBoolean.write(value.`thetisTune`, buf)
+            FfiConverterBoolean.write(value.`thetisTuneKnown`, buf)
             FfiConverterBoolean.write(value.`thetisNotRunning`, buf)
             FfiConverterSequenceString.write(value.`txProfileNames`, buf)
             FfiConverterSequenceUByte.write(value.`spectrumBins`, buf)
@@ -6430,6 +6509,42 @@ public object FfiConverterTypeBridgeRogerBeep: FfiConverterRustBuffer<BridgeRoge
             FfiConverterBoolean.write(value.`onThetis`, buf)
             FfiConverterBoolean.write(value.`onRadio1`, buf)
             FfiConverterBoolean.write(value.`onRadio2`, buf)
+    }
+}
+
+
+
+data class BridgeTuneButton (
+    var `shown`: kotlin.Boolean,
+    var `waiting`: kotlin.Boolean,
+    var `canPress`: kotlin.Boolean
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBridgeTuneButton: FfiConverterRustBuffer<BridgeTuneButton> {
+    override fun read(buf: ByteBuffer): BridgeTuneButton {
+        return BridgeTuneButton(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BridgeTuneButton) = (
+            FfiConverterBoolean.allocationSize(value.`shown`) +
+            FfiConverterBoolean.allocationSize(value.`waiting`) +
+            FfiConverterBoolean.allocationSize(value.`canPress`)
+    )
+
+    override fun write(value: BridgeTuneButton, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`shown`, buf)
+            FfiConverterBoolean.write(value.`waiting`, buf)
+            FfiConverterBoolean.write(value.`canPress`, buf)
     }
 }
 

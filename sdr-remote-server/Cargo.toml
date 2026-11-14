@@ -15,7 +15,7 @@ path = "src/main.rs"
 naspelen = []
 
 [dependencies]
-sdr-remote-core = { path = "../sdr-remote-core" }
+sdr-remote-core = { path = "../sdr-remote-core", features = ["audio-stream"] }
 sdr-remote-relay = { path = "../sdr-remote-relay" }
 sdr-remote-quic = { path = "../sdr-remote-quic" }
 sdr-remote-chat = { path = "../sdr-remote-chat" }

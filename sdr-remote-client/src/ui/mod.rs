@@ -70,7 +70,7 @@ pub(crate) fn main_window_pos_visible(pos: [f32; 2], size: [f32; 2]) -> bool {
 
 use std::time::Instant;
 
-use egui::{Color32, Pos2, RichText, Stroke, TextureHandle, Vec2};
+use egui::{Color32, Pos2, RichText, Stroke, Vec2};
 use tokio::sync::{mpsc, watch};
 
 use std::collections::{HashMap, VecDeque};
@@ -125,7 +125,11 @@ pub(crate) struct WaterfallRingBuffer {
     count: usize,
     last_seq: u16,
     pub(crate) height: usize,
-    texture: Option<TextureHandle>,
+    texture: spectrum::WaterfallImage,
+    /// Which buffer this is, and how many rows it has taken: the picture of it
+    /// is drawn again only when either says something new arrived.
+    id: u64,
+    pushes: u64,
 }
 
 impl WaterfallRingBuffer {
@@ -141,7 +145,12 @@ impl WaterfallRingBuffer {
             count: 0,
             last_seq: 0,
             height,
-            texture: None,
+            texture: spectrum::WaterfallImage::default(),
+            id: {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            },
+            pushes: 0,
         }
     }
 
@@ -165,6 +174,7 @@ impl WaterfallRingBuffer {
         if self.count < self.height {
             self.count += 1;
         }
+        self.pushes += 1;
     }
 
     /// Push only the "full" side (no view). Used for VRX high-res
@@ -187,6 +197,7 @@ impl WaterfallRingBuffer {
         if self.count < self.height {
             self.count += 1;
         }
+        self.pushes += 1;
     }
 }
 
@@ -433,10 +444,9 @@ pub struct SdrRemoteApp {
     power_on: bool,
     power_press_start: Option<Instant>,
     shutdown_sent: bool,
-    thetis_tuning: bool,
-    tune_pa_was_operate: bool,       // PA was in operate before tune, restore after
-    tune_pending_on: Option<Instant>,  // delayed ZZTU1 after PA standby
-    tune_pending_restore: Option<Instant>, // delayed PA restore after ZZTU0
+    /// The TUNE button with its PA bypass (2.13.3 build 4): what it shows,
+    /// the waits, and whether the PA goes back.
+    thetis_tune_button: sdr_remote_logic::tune_button::TuneButton,
     tx_profile: u8,
     nr_level: u8,
     anf_on: bool,
@@ -679,11 +689,11 @@ pub struct SdrRemoteApp {
     vrx2_high_res_last_span_hz: u32,
     /// VRX2's independent channel spectrum (see `vrx1_spectrum`).
     vrx2_spectrum: ChannelSpectrum,
-    /// Texture handles for VRX waterfall rendering - one per VRX so
-    /// zoom/pan stays independent. Rebuilt on each render from the
-    /// shared RX1/RX2 waterfall ring buffers (no duplicate storage).
-    vrx1_waterfall_texture: Option<egui::TextureHandle>,
-    vrx2_waterfall_texture: Option<egui::TextureHandle>,
+    /// The VRX waterfall pictures - one per VRX so zoom/pan stays
+    /// independent. Drawn from the VRX's own ring buffer, again only where
+    /// something changed (`spectrum::WaterfallImage`).
+    vrx1_waterfall_texture: spectrum::WaterfallImage,
+    vrx2_waterfall_texture: spectrum::WaterfallImage,
     /// One-shot flag: send the locally-persisted VRX state for BOTH
     /// channels (enable + freq + mode + volume) to the server once
     /// after the first successful connect, then stay quiet until user

@@ -44,6 +44,14 @@ pub fn expected_route_label(relay_enabled: bool, url: String, station: String, t
         .to_string()
 }
 
+/// What the Thetis TUNE button shows (`sdr_remote_logic::tune_button`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BridgeTuneButton {
+    pub shown: bool,
+    pub waiting: bool,
+    pub can_press: bool,
+}
+
 /// Filter edges for one press of a width button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BridgeFilterEdges {
@@ -579,6 +587,8 @@ pub struct BridgeRadioState {
     pub diversity_autonull_result: u16,
     pub drive_level: u8,
     pub rx_af_gain: u8,
+    /// Whether `rx_af_gain` is the server's value: 0 % is a volume, not "not yet".
+    pub rx_volume_synced: bool,
     pub agc_enabled: bool,
     /// The server is not running this client's build.
     ///
@@ -622,6 +632,10 @@ pub struct BridgeRadioState {
     pub filter_high_hz: i32,
     pub thetis_configured: bool,
     pub thetis_starting: bool,
+    /// Thetis is tuning (TUNE), whoever switched it on: the button follows it.
+    pub thetis_tune: bool,
+    /// This server says whether Thetis tunes (one from before 2.13.3 does not).
+    pub thetis_tune_known: bool,
     /// Server explicitly reports Thetis.exe is not running on the server PC.
     /// Drives the Thetis-autostart option; false when the server says nothing
     /// about the process (old server) - see `ConnectStatus::thetis_reported_not_running`.
@@ -901,6 +915,7 @@ impl From<RadioState> for BridgeRadioState {
             diversity_autonull_result: s.diversity_autonull_result,
             drive_level: s.drive_level,
             rx_af_gain: s.rx_af_gain,
+            rx_volume_synced: s.rx_volume_synced,
             agc_enabled: s.agc_enabled,
             server_build_differs: s.server_build.is_trouble(),
             server_build: s.server_build.theirs().unwrap_or_default().to_string(),
@@ -922,6 +937,8 @@ impl From<RadioState> for BridgeRadioState {
             filter_high_hz: s.filter_high_hz,
             thetis_configured: s.thetis_configured,
             thetis_starting: s.thetis_starting,
+            thetis_tune: s.thetis_tune,
+            thetis_tune_known: s.thetis_tune_known,
             thetis_not_running: s.connect_status.thetis_reported_not_running(),
             tx_profile_names: s.tx_profile_names,
             spectrum_bins: s.spectrum_bins.iter().map(|v| (v >> 8) as u8).collect(),
@@ -1139,6 +1156,10 @@ pub struct SdrBridge {
     ui_language: Mutex<String>,
     /// Follows the measurement file in the state, to copy the log when one ends.
     measurement_log: Mutex<crate::logging::MeasurementLogFollower>,
+    /// The Thetis TUNE button with its PA bypass (2.13.3 build 4). Here and not
+    /// in Compose: a screen that left the composition took the PA's memory with
+    /// it, so after a dropped link the PA stayed in standby.
+    thetis_tune: Mutex<sdr_remote_logic::tune_button::TuneButton>,
     /// Keeps the relay monitor alive for as long as the bridge exists (it runs
     /// on a thread of its own), and passes the phone's network events on to it.
     /// `None` in direct mode.
@@ -1272,6 +1293,7 @@ impl SdrBridge {
             shutdown_tx: Mutex::new(Some(shutdown_tx)),
             ui_language: Mutex::new("en".to_string()),
             measurement_log: Mutex::new(crate::logging::MeasurementLogFollower::default()),
+            thetis_tune: Mutex::new(Default::default()),
             relay_monitor: Mutex::new(relay_monitor),
             relay_status,
             chat_relay_url: if relay_active {
@@ -1832,6 +1854,46 @@ impl SdrBridge {
 
     pub fn server_shutdown(&self) {
         let _ = self.cmd_tx.send(Command::ServerShutdown);
+    }
+
+    /// One press of the Thetis TUNE button.
+    pub fn thetis_tune_press(&self) {
+        use sdr_remote_logic::tune_button::{Pa, Server};
+        let state = self.state_rx.lock().unwrap().borrow().clone();
+        let acts = self.thetis_tune.lock().unwrap()
+            .press(std::time::Instant::now(), Server::of(&state), Pa::of(&state));
+        self.run_thetis_tune_actions(acts);
+    }
+
+    /// The button follows the server and the waits of the PA run out: from the
+    /// app's poll, which runs for as long as the app does.
+    pub fn thetis_tune_tick(&self) {
+        use sdr_remote_logic::tune_button::{Pa, Server};
+        let state = self.state_rx.lock().unwrap().borrow().clone();
+        let acts = self.thetis_tune.lock().unwrap()
+            .tick(std::time::Instant::now(), Server::of(&state), Pa::of(&state));
+        self.run_thetis_tune_actions(acts);
+    }
+
+    pub fn thetis_tune_button(&self) -> BridgeTuneButton {
+        let state = self.state_rx.lock().unwrap().borrow().clone();
+        let b = self.thetis_tune.lock().unwrap();
+        BridgeTuneButton {
+            shown: b.shown(),
+            waiting: b.waiting(),
+            can_press: b.can_press(sdr_remote_logic::tune_button::Server::of(&state)),
+        }
+    }
+
+    fn run_thetis_tune_actions(&self, acts: Vec<sdr_remote_logic::tune_button::Action>) {
+        use sdr_remote_logic::tune_button::Action;
+        for a in acts {
+            let _ = self.cmd_tx.send(match a {
+                Action::Tune(on) => Command::ThetisTune(on),
+                Action::Rf2kOperate(on) => Command::Rf2kOperate(on),
+                Action::SpeToggle => Command::SpeOperate,
+            });
+        }
     }
 
     pub fn get_state(&self) -> BridgeRadioState {

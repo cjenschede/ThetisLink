@@ -264,6 +264,11 @@ pub struct RadioState {
     pub anf_on: bool,
     pub drive_level: u8,
     pub rx_af_gain: u8,
+    /// Whether `rx_af_gain` is what the server said, or still the default of
+    /// a link that has not said it: 0 % is a volume, not "not yet". No RX1
+    /// volume goes out before it is true, and a screen follows the value only
+    /// once it is.
+    pub rx_volume_synced: bool,
     pub agc_enabled: bool,
     /// Which build the server runs, judged against this client's.
     ///
@@ -715,6 +720,13 @@ pub struct RadioState {
     pub rx2_nf_enable: bool,
     pub rx_balance: i8,
     pub tune_drive: u8,     // 0-100
+    /// Thetis is tuning, as the server says (2.13.3 build 1): the TUNE button
+    /// shows this and not its own last press.
+    pub thetis_tune: bool,
+    /// This server has said whether Thetis tunes (2.13.3 build 3). A server
+    /// from before 2.13.3 never does; the button then keeps its own press,
+    /// or it would fall back to "off" and every press would send "on".
+    pub thetis_tune_known: bool,
     pub mon_volume: i8,     // dB, typically -40..0
 
     pub auth_rejected: bool,
@@ -786,6 +798,7 @@ impl Default for RadioState {
             anf_on: false,
             drive_level: 0,
             rx_af_gain: 0,
+            rx_volume_synced: false,
             agc_enabled: false,
             server_build: sdr_remote_core::protocol::PeerBuild::Unknown,
             server_fine_spectrum_view: false,
@@ -1054,6 +1067,8 @@ impl Default for RadioState {
             rx2_nf_enable: false,
             rx_balance: 0,
             tune_drive: 0,
+            thetis_tune: false,
+            thetis_tune_known: false,
             mon_volume: -40,
             auth_rejected: false,
             totp_required: false,
@@ -1119,6 +1134,9 @@ impl RadioState {
     /// field of this struct: the transmit flags (locals of its loop) and the
     /// recent CW edges.
     pub fn forget_session(&mut self) -> SessionForgotten {
+        // The RX1 volume is the next session's to say; until it does, no
+        // screen follows it and the engine sends none.
+        self.rx_volume_synced = false;
         self.ptt_denial.clear();
         self.server_tx = false;
         self.smeter_tx = false;
@@ -1138,6 +1156,10 @@ impl RadioState {
         self.yaesu2_held_by_other = false;
         self.other_tx = false;
         self.server_tx_closed = false;
+        // Whether that server's Thetis tunes (2.13.3 build 1): the next server
+        // says it again, and until then the button does not claim a carrier.
+        self.thetis_tune = false;
+        self.thetis_tune_known = false;
         // What the last server said about its antenna position (build 215).
         self.rx_only_unguarded = false;
         // Where the last server's DDCs stood (build 231): the next server, or
@@ -1310,6 +1332,8 @@ mod forget_session_tests {
         s.yaesu2_held_by_other = true;
         s.other_tx = true;
         s.server_tx_closed = true;
+        s.thetis_tune = true;
+        s.thetis_tune_known = true;
         s.rx_only_unguarded = true;
         s.totp_required = true;
         s.server_build = sdr_remote_core::protocol::PeerBuild::Different("2.11.0".into());
@@ -1365,6 +1389,8 @@ mod forget_session_tests {
         }
 
         assert!(!s.server_tx_closed, "a restarted server is open again: the screen would keep saying it is closed");
+        assert!(!s.thetis_tune, "the TUNE button claimed a carrier of a server that is gone");
+        assert!(!s.thetis_tune_known, "the next server may be one that never says whether Thetis tunes");
         assert!(!s.rx_only_unguarded, "the next server may guard its RX-only positions");
         assert!(!s.totp_required, "a code step does not outlive its session: the next connect would send no heartbeats");
         assert!(!s.server_tx);
@@ -1426,5 +1452,38 @@ mod recording_list_tests {
         // Back from transmitting: the first signal is the peak again.
         assert_eq!(super::smeter_peak_step(super::SMETER_NO_DATA_DBM, 0.1, -95.0, false), (-95.0, true));
         assert_eq!(super::SMETER_PEAK_HOLD_S, 2.0);
+    }
+}
+
+#[cfg(test)]
+mod rx_volume_follow_tests {
+    /// A volume of 0 % is followed like any other once the server has said it,
+    /// on both screens; before that the slider keeps its own. The motor holds
+    /// its own volume back on the same flag.
+    #[test]
+    fn both_screens_follow_a_known_volume_zero_included() {
+        let engine = include_str!("engine.rs");
+        assert_eq!(engine.matches("state.rx_volume_synced = true;").count(), 1, "set by the server's value only");
+        assert!(!engine.contains("state.rx_volume_synced = false;"), "cleared in one place, with the session");
+        let state = include_str!("state.rs");
+        let forget = &state[state.find("pub fn forget_session").unwrap()..];
+        assert!(forget[..forget.find("
+    }").unwrap()].contains("self.rx_volume_synced = false;"), "there");
+        assert_eq!(engine.matches("if state.rx_volume_synced && af_gain != last_sent_volume {").count(), 1);
+        assert!(!engine.contains("let mut rx_volume_synced"), "one flag, the shared one");
+        let desktop = include_str!("../../sdr-remote-client/src/ui/sync_state.rs");
+        assert_eq!(desktop.matches("        if state.rx_volume_synced {\n            self.rx_volume = state.rx_af_gain as f32 / 100.0;").count(), 1);
+        assert!(!desktop.contains("state.rx_af_gain > 0"), "a 0 is not \"not yet\"");
+        let bridge = include_str!("../../sdr-remote-android/src/bridge.rs");
+        assert_eq!(bridge.matches("rx_volume_synced: s.rx_volume_synced,").count(), 1);
+        let phone = include_str!("../../sdr-remote-android/android/app/src/main/java/com/sdrremote/ui/screens/MainScreen.kt");
+        assert_eq!(phone.matches("if (state.rxVolumeSynced && !yaesuActive) serverRxAfGain / 100f else null").count(), 1);
+        assert!(!phone.contains("serverRxAfGain > 0"), "nor on the phone");
+        assert_eq!(phone.matches("LaunchedEffect(serverRxAfGain, state.rxVolumeSynced) {").count(), 1,
+            "a first value of 0 equals the start, so the flag is what makes it follow");
+        let vm = include_str!("../../sdr-remote-android/android/app/src/main/java/com/sdrremote/viewmodel/SdrViewModel.kt");
+        assert_eq!(vm.matches("rxVolumeSynced = s.rxVolumeSynced,").count(), 1);
+        let label = include_str!("../../sdr-remote-android/android/app/src/main/java/com/sdrremote/ui/components/StatsPanel.kt");
+        assert_eq!(label.matches("(sliderToValue(pos.value) * 100).roundToInt()").count(), 1, "the phone rounds as the motor does");
     }
 }

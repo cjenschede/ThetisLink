@@ -153,7 +153,7 @@ pub enum MenuRead {
 pub(super) fn refresh(st: &mut super::YaesuState, model: RadioModel, prefix: &str, read: MenuRead) {
     if let Some(menus) = update(st, model, read) {
         log::warn!(
-            "{} PTT on a USB line: {}; the radio transmits when Windows raises the line (at start-up, for example); ThetisLink keys by CAT and does not need it",
+            "{} PTT on a USB line: {}; the radio transmits when the PC raises the line (when it starts or opens the port, for example); ThetisLink keys by CAT and does not need it",
             prefix,
             menus
         );

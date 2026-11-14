@@ -2207,28 +2207,27 @@ private fun YaesuTab(
         // (always visible, master for Thetis AND the selected Yaesu). The former "Vol:"
         // slider here was a duplicate (same yaesuVolumeSel) and has been removed.
         // Sync sliders from server state
-        var squelch by remember { mutableFloatStateOf(state.yaesuSquelch.toFloat()) }
-        var rfGain by remember { mutableFloatStateOf(state.yaesuRfGain.toFloat()) }
-        var micGain by remember { mutableFloatStateOf(state.yaesuMicGain.toFloat()) }
-        var rfPower by remember { mutableFloatStateOf(state.yaesuTxPower.toFloat()) }
-        LaunchedEffect(state.yaesuSquelch) { squelch = state.yaesuSquelch.toFloat() }
-        LaunchedEffect(state.yaesuRfGain) { rfGain = state.yaesuRfGain.toFloat() }
-        LaunchedEffect(state.yaesuMicGain) { micGain = state.yaesuMicGain.toFloat() }
-        LaunchedEffect(state.yaesuTxPower) { if (state.yaesuTxPower > 0) rfPower = state.yaesuTxPower.toFloat() }
+        // Back to what the radio reports after the release (`FollowingValue`):
+        // a value the radio refused left the server's value as it was.
+        val squelch = com.sdrremote.ui.components.rememberFollowingValue(state.yaesuSquelch.toFloat())
+        val rfGain = com.sdrremote.ui.components.rememberFollowingValue(state.yaesuRfGain.toFloat())
+        val rfPower = com.sdrremote.ui.components.rememberFollowingValue(state.yaesuTxPower.takeIf { it > 0 }?.toFloat())
 
         // Squelch
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("SQL:", fontSize = 12.sp, modifier = Modifier.width(40.dp))
-            Slider(value = squelch, onValueChange = { squelch = it; onControl(0x29, it.toInt()) },
+            Slider(value = squelch.value, onValueChange = { squelch.drag(it); onControl(0x29, it.toInt()) },
+                onValueChangeFinished = { squelch.release() },
                 valueRange = 0f..100f, modifier = Modifier.weight(1f))
-            Text("${squelch.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
+            Text("${squelch.value.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
         // RF Gain
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("RF:", fontSize = 12.sp, modifier = Modifier.width(40.dp))
-            Slider(value = rfGain, onValueChange = { rfGain = it; onControl(0x2A, it.toInt()) },
+            Slider(value = rfGain.value, onValueChange = { rfGain.drag(it); onControl(0x2A, it.toInt()) },
+                onValueChangeFinished = { rfGain.release() },
                 valueRange = 0f..255f, modifier = Modifier.weight(1f))
-            Text("${rfGain.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
+            Text("${rfGain.value.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
         // Mic gain (in this client, at the front of the TX chain), per radio.
         val micEqPrefs = remember { context.getSharedPreferences(YaesuTxPrefs.STORE, android.content.Context.MODE_PRIVATE) }
@@ -2283,9 +2282,10 @@ private fun YaesuTab(
         val pwrMax = if (state.yaesuTxPowerMax.toInt() >= 5) state.yaesuTxPowerMax.toFloat() else 100f
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("PWR:", fontSize = 12.sp, modifier = Modifier.width(40.dp))
-            Slider(value = rfPower.coerceIn(5f, pwrMax), onValueChange = { rfPower = it; onControl(0x2C, it.toInt()) },
+            Slider(value = rfPower.value.coerceIn(5f, pwrMax), onValueChange = { rfPower.drag(it); onControl(0x2C, it.toInt()) },
+                onValueChangeFinished = { rfPower.release() },
                 valueRange = 5f..pwrMax, modifier = Modifier.weight(1f))
-            Text("${rfPower.coerceIn(5f, pwrMax).toInt()}W", fontSize = 11.sp, modifier = Modifier.width(36.dp))
+            Text("${rfPower.value.coerceIn(5f, pwrMax).toInt()}W", fontSize = 11.sp, modifier = Modifier.width(36.dp))
         }
 
         // DSP/function controls - collapsible, shared for the selected radio.
@@ -2872,9 +2872,9 @@ private fun DspLevelRow(
     onDspControl: (Int, Int) -> Unit,
     enabled: Boolean = true,
 ) {
-    // Proven pattern (like squelch and RF gain): send on onValueChange, sync from server state.
-    var v by remember { mutableFloatStateOf(levelValue.toFloat()) }
-    LaunchedEffect(levelValue) { v = levelValue.toFloat().coerceIn(min, max) }
+    // Like squelch and RF gain: send on onValueChange, back to the server's value
+    // after the release (`FollowingValue`).
+    val v = com.sdrremote.ui.components.rememberFollowingValue(levelValue.toFloat().coerceIn(min, max))
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
         if (toggleCtrl != null) {
             DspToggleBtn(label, toggleOn, enabled) { onDspControl(toggleCtrl, if (toggleOn) 0 else 1) }
@@ -2882,13 +2882,14 @@ private fun DspLevelRow(
             Text(label, fontSize = 12.sp, modifier = Modifier.width(56.dp))
         }
         Slider(
-            value = v.coerceIn(min, max),
-            onValueChange = { v = it; onDspControl(levelCtrl, it.toInt()) },
+            value = v.value.coerceIn(min, max),
+            onValueChange = { v.drag(it); onDspControl(levelCtrl, it.toInt()) },
+            onValueChangeFinished = { v.release() },
             valueRange = min..max,
             enabled = enabled,
             modifier = Modifier.weight(1f),
         )
-        Text("${v.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
+        Text("${v.value.toInt()}", fontSize = 11.sp, modifier = Modifier.width(36.dp))
     }
 }
 
@@ -2897,8 +2898,7 @@ private fun DspFreqRow(
     label: String, toggleCtrl: Int, on: Boolean, freqCtrl: Int, freqValue: Int,
     min: Float, max: Float, enabled: Boolean, onDspControl: (Int, Int) -> Unit,
 ) {
-    var v by remember { mutableFloatStateOf(freqValue.toFloat()) }
-    LaunchedEffect(freqValue) { v = freqValue.toFloat().coerceIn(min, max) }
+    val v = com.sdrremote.ui.components.rememberFollowingValue(freqValue.toFloat().coerceIn(min, max))
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
         Button(
             onClick = { onDspControl(toggleCtrl, if (on) 0 else 1) },
@@ -2908,13 +2908,14 @@ private fun DspFreqRow(
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
         ) { Text(label, fontSize = 11.sp) }
         Slider(
-            value = v.coerceIn(min, max),
-            onValueChange = { v = it; onDspControl(freqCtrl, it.toInt()) },
+            value = v.value.coerceIn(min, max),
+            onValueChange = { v.drag(it); onDspControl(freqCtrl, it.toInt()) },
+            onValueChangeFinished = { v.release() },
             valueRange = min..max,
             enabled = enabled,
             modifier = Modifier.weight(1f).padding(start = 6.dp),
         )
-        Text("${v.toInt()}", fontSize = 11.sp, modifier = Modifier.width(44.dp))
+        Text("${v.value.toInt()}", fontSize = 11.sp, modifier = Modifier.width(44.dp))
     }
 }
 

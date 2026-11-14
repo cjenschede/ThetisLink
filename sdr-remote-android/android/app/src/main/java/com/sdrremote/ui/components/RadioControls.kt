@@ -22,8 +22,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -67,13 +65,16 @@ private const val CONTROL_ANF = 0x05
 private const val CONTROL_TX_PROFILE = 0x03
 private const val CONTROL_DRIVE = 0x06
 private const val CONTROL_NB = 0x38
-private const val CONTROL_TUNE = 0x1F
 private const val CONTROL_DIVERSITY = 0x40
 
 @Composable
 fun RadioControls(
     powerOn: Boolean,
     thetisStarting: Boolean,
+    thetisTuneShown: Boolean,
+    thetisTuneWaiting: Boolean,
+    thetisTuneCanPress: Boolean,
+    onThetisTune: () -> Unit,
     thetisNotRunning: Boolean,
     connected: Boolean,
     nrLevel: Int,
@@ -90,16 +91,8 @@ fun RadioControls(
     txProfiles: List<Pair<Int, String>>,
     serverTxProfileNames: List<String>,
     driveLevel: Int,
-    rf2kOperate: Boolean,
-    rf2kConnected: Boolean,
-    rf2kActive: Boolean,
-    speState: Int,
-    speConnected: Boolean,
-    speActive: Boolean,
     onControl: (Int, Int) -> Unit,
     onAgcToggle: (Boolean) -> Unit,
-    onRf2kOperate: (Boolean) -> Unit,
-    onSpeOperate: () -> Unit,
 ) {
     // Stable callback for DriveSlider: prevents recomposition during polling
     val onDriveChange: (Int) -> Unit = remember { { onControl(CONTROL_DRIVE, it) } }
@@ -338,52 +331,37 @@ fun RadioControls(
             }
         }
 
-        // TUNE button (Thetis carrier with PA bypass)
+        // TUNE button (Thetis carrier with PA bypass). What it shows, the PA to
+        // standby and back, and a TUNE that ended elsewhere: the bridge's
+        // machine (sdr_remote_logic::tune_button, the desktop's), which lives
+        // in the ViewModel and not in this screen (2.13.3 build 4).
         if (connected && powerOn) {
-            var tuneActive by remember { mutableStateOf(false) }
-            var tunePaWasOperate by remember { mutableStateOf(false) }
-            val coroutineScope = rememberCoroutineScope()
             Spacer(Modifier.height(4.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                val tuneColor = if (tuneActive) Color(0xFFDC3C3C) else Color(0xFF505050)
+                val tuneColor = when {
+                    thetisTuneShown -> Color(0xFFDC3C3C)
+                    thetisTuneWaiting -> Color(0xFFB48200)
+                    else -> Color(0xFF505050)
+                }
                 Button(
-                    onClick = {
-                        val newTune = !tuneActive
-                        if (newTune) {
-                            // Starting tune: bypass PA first, then delayed ZZTU1
-                            tunePaWasOperate = rf2kOperate || speState == 2
-                            if (rf2kOperate) onRf2kOperate(false)
-                            if (speState == 2) onSpeOperate()
-                            coroutineScope.launch {
-                                delay(500) // Wait for PA to go standby
-                                onControl(CONTROL_TUNE, 1)
-                            }
-                        } else {
-                            // Stopping tune: ZZTU0 immediately, delayed PA restore
-                            onControl(CONTROL_TUNE, 0)
-                            if (tunePaWasOperate) {
-                                coroutineScope.launch {
-                                    delay(1000) // Wait for Thetis TX→RX switch
-                                    if (rf2kConnected) onRf2kOperate(true)
-                                    if (speConnected) onSpeOperate()
-                                }
-                                tunePaWasOperate = false
-                            }
-                        }
-                        tuneActive = newTune
-                    },
+                    enabled = thetisTuneCanPress,
+                    onClick = onThetisTune,
                     colors = ButtonDefaults.buttonColors(containerColor = tuneColor),
                 ) {
                     Text(
-                        if (tuneActive) "TUNE ON" else "TUNE",
+                        when {
+                            thetisTuneShown -> "TUNE ON"
+                            thetisTuneWaiting -> "PA STBY..."
+                            else -> "TUNE"
+                        },
                         color = Color.White,
-                        fontWeight = if (tuneActive) FontWeight.Bold else FontWeight.Normal,
+                        fontWeight = if (thetisTuneShown) FontWeight.Bold else FontWeight.Normal,
                     )
                 }
-                if (tuneActive) {
+                if (thetisTuneShown) {
                     Text(stringResource(R.string.radio_carrier_on), color = Color(0xFFFF6464))
                 }
             }
@@ -404,7 +382,9 @@ private val SliderNestedScrollConnection = object : NestedScrollConnection {
 
 @Composable
 private fun DriveSlider(driveLevel: Int, onDriveChange: (Int) -> Unit) {
-    var localDrive by remember(driveLevel) { mutableFloatStateOf(driveLevel.toFloat()) }
+    // Back to the drive Thetis reports after the release: a PA in Operate holds
+    // its own, and a value it sets back did not change the server's.
+    val drive = rememberFollowingValue(driveLevel.toFloat())
 
     Row(
         modifier = Modifier
@@ -414,13 +394,16 @@ private fun DriveSlider(driveLevel: Int, onDriveChange: (Int) -> Unit) {
     ) {
         Text(stringResource(R.string.radio_drive), modifier = Modifier.weight(0.2f))
         Slider(
-            value = localDrive,
-            onValueChange = { localDrive = it },
-            onValueChangeFinished = { onDriveChange(localDrive.toInt()) },
+            value = drive.value,
+            onValueChange = { drive.drag(it) },
+            onValueChangeFinished = {
+                onDriveChange(drive.value.toInt())
+                drive.release()
+            },
             valueRange = 0f..100f,
             modifier = Modifier.weight(0.6f),
         )
-        Text("${localDrive.toInt()}%", modifier = Modifier.weight(0.2f))
+        Text("${drive.value.toInt()}%", modifier = Modifier.weight(0.2f))
     }
 }
 

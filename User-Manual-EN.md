@@ -1,4 +1,4 @@
-# ThetisLink v2.13.2: User Manual
+# ThetisLink v2.14.0: User Manual
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ ThetisLink is distributed as a zip file with the following contents:
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.13.2.apk` | Android client app |
+| `ThetisLink-2.14.0.apk` | Android client app |
 | `Installatie.md`, `Installatie.pdf` | Installation guide (Dutch) |
 | `User-Manual.md`, `User-Manual.pdf` | User manual (Dutch) |
 | `Technische-Referentie.md`, `Technische-Referentie.pdf` | Technical reference (Dutch) |
@@ -425,7 +425,7 @@ SSB, CW or DIG stops at the carrier.
 
 ### Volume
 
-- **RX Volume:** receive level (TCI `volume` / `rx_volume`)
+- **RX Volume:** receive level (TCI `volume` / `rx_volume`). Since 2.14.0 the percent is Thetis's own setting: 50 % is 50 in Thetis.
 - **TX Gain:** gain at the start of the transmit chain, in dB (see *The transmit chain* under the Yaesu)
 - **Drive:** transmit power 0-100%
 - **Mic AGC:** automatic microphone gain (on/off)
@@ -1429,6 +1429,7 @@ If the spectrum (line) and the waterfall are not in sync when panning, restart t
 
 | Version | Highlights |
 |---|---|
+| **2.14.0** | **A TUNE that goes off with its client, the volume on Thetis's own scale, and ThetisLink on Linux.** A TUNE you start from a client goes off when that client leaves; the TUNE button shows on desktop and phone what Thetis does. The volume is Thetis's own setting: 50 % in the client is 50 in Thetis, and 0 % is followed on every screen. On the phone a slider goes back after you let go to what the radio or PA holds. A Yaesu switched on after the server no longer stutters. The server and the desktop client build on Linux; there the server works together with hpsdr-rs, both still in development (see the installation guide). Works with 2.13.1 and 2.13.2 in both directions. |
 | **2.13.2** | **The transmit spectrum of a Yaesu, a tuner that says when it did not tune, and serial devices that come back.** The desktop client shows the transmit spectrum of a Yaesu in its EQ section: what the encoder really sends, live and as the average of the last over, with the EQ curve over it. A StockCorner tuner on an MCP2221A gets its first tune after power-on right, reports a tune that did not tune as failed (**Tuned below**, 4.5 V by default, 0 = off), and is not pressed while it is off. The UltraBeam and the SPE Expert come back by themselves after a re-plugged USB cable or when they are switched on after the server. Works with 2.13.1, in both directions. |
 | **2.13.1** | **A direct connection outlives the relay, the transmit gain is set in dB, and Windows needs nothing extra.** A connection found through the relay that runs straight (D+R, L+R) carries on when the relay goes away; the R turns red. A Yaesu transmits with 120 ms of lead (was 80 ms). No Visual C++ Redistributable needed. One server per PC; the server signs in at the relay only once it has its port. The server keeps the previous run's log, and a problem report takes it along. The transmit gain is set in dB at the front of the chain, with a limiter at -1 dB; a Yaesu EQ profile or phone preset carries the mic gain, compressor and AGC; an advanced twenty-channel EQ on the desktop; a CLIP lamp. A Yaesu recording gets the receive correction too; a server setting for Yaesu receive levels set by the installation guide (radios and setting only once the server and every client run 2.13.1). The PDF manuals are back. One spectrum panel for every window, a VRX AGC that follows its receiver, a Fill field, a finer pan and VRX width at high zoom, and the FFT size only from a client that looks (up to 512K). Works with 2.13.0 in both directions; stock Thetis v2.10.3.15 suffices, the fork PA3GHM TL2-18 still applies. |
 | **2.13.0** | **One encrypted connection, at home and on the road.** Everything runs over one QUIC connection, directly or through the relay, and the connection finds the shortest way by itself (L, D, R, D+R, L+R). A network that blocks UDP connects over an emergency route through TCP. After a network change the app reconnects at once. The password check runs both ways. A Yaesu transmits with the same buffer and timing as Thetis, with 80 ms of lead. **Update server, desktop and app together**: a 2.12 program does not connect to 2.13. Stock Thetis v2.10.3.15 suffices; the fork PA3GHM TL2-18 is released at the same time. |
