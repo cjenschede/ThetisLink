@@ -1,12 +1,12 @@
-# ThetisLink v2.14.0: Technical Reference
+# ThetisLink v2.14.1: Technical Reference
 
 ## 1. Overview
 
 ThetisLink is a system for remote operation of a Thetis SDR receiver (whatever radio Thetis drives, reached over TCI and never addressed directly) and of up to two Yaesu transceivers (FT-991A / FTX-1) connected straight to the server, over a network connection. What a radio offers is what Thetis offers for it: RX2 and diversity need a second receiver, and the spectrum width follows the sample rate that radio can deliver. It provides bidirectional real-time audio streaming, PTT control, DDC spectrum/waterfall display, full RX2/VFO-B support, diversity, Yaesu memory channel management and radio settings editor over one encrypted QUIC connection with Opus codec.
 
-**Version:** v2.14.0 (shared version number in `sdr-remote-core::VERSION`)
+**Version:** v2.14.1 (shared version number in `sdr-remote-core::VERSION`)
 **Development language:** Rust + Kotlin (Android UI)
-**Target platform:** Windows 10/11 and Android 8+ (arm64); macOS (Intel/Apple Silicon) from source, experimental; Linux (server and desktop client) from source, in development
+**Target platform:** Windows 10/11 and Android 8+ (arm64); macOS (Intel/Apple Silicon) from source, experimental; Linux x86_64 and aarch64 (server and desktop client) as a package since v2.14.1, in development
 **Design priority:** latency > bandwidth > features
 
 ### Thetis compatibility
@@ -26,9 +26,19 @@ All extensions are behind the **"ThetisLink extensions"** checkbox in Setup → 
 The default IQ sample rate is 384 kHz. With ThetisLink extensions the user can choose from: 48, 96, 192, 384, 768 or **1536 kHz**, selectable per receiver via the DDC sample rate dropdown in the client.
 
 **Repos:**
-- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.14.0`)
+- ThetisLink: [cjenschede/ThetisLink](https://github.com/cjenschede/ThetisLink) (public release repo, tag `v2.14.1`)
 - Thetis fork: [cjenschede/Thetis](https://github.com/cjenschede/Thetis) (branch `thetislink-tl2`)
 - Original Thetis: [ramdor/Thetis](https://github.com/ramdor/Thetis)
+
+### v2.14.1 highlights
+
+**Linux packages.** `tools/build-linux.sh` builds the server and the desktop client for x86_64 (on Ubuntu 22.04) and
+aarch64 (on a Raspberry Pi, in a container of the same image), and packs them with the licence texts and a README into
+`ThetisLink-<version>-linux-<arch>.tar.gz`, the same bytes on every machine. A release compares each package with a
+GitHub Actions build of the same commit and with a build of the public tree. glibc 2.35 or newer; no OpenSSL (https
+through rustls) and no GTK or WebKitGTK (the embedded web view is Windows only). An SPE session sets DTR low after RTS
+low, because Linux raises DTR when it opens a port. Nothing changed on the wire; a 2.14.1 program talks to a 2.14.0,
+2.13.1 or 2.13.2 one.
 
 ### v2.14.0 highlights
 
@@ -688,7 +698,6 @@ sdr-remote/
 | `rubato` | 0.14 | Resampling (sinc interpolation) |
 | `ringbuf` | 0.4 | Lock-free SPSC ring buffer (audio thread <-> network thread) |
 | `eframe`/`egui` | 0.29 | Desktop client UI |
-| `bytemuck` | 1 | Zero-copy byte casting |
 | `log`/`env_logger` | 0.4/0.11 | Logging |
 | `anyhow` | 1 | Error handling |
 | `oboe` | 0.6 | Audio I/O (AAudio on Android) |
@@ -698,7 +707,7 @@ sdr-remote/
 | `futures-util` | 0.3 | StreamExt/SinkExt for WebSocket (server) |
 | `serialport` | 4.7 | Serial USB communication (devices) |
 | `midir` | 0.10 | MIDI interface |
-| `wry` | 0.54 | WebView for embedded WebSDR/KiwiSDR window (client) |
+| `wry` | 0.54 | WebView for embedded WebSDR/KiwiSDR window (client, Windows) |
 | `hmac`/`sha2` | 0.12/0.10 | HMAC-SHA256 authentication |
 | `hkdf` | 0.12 | Session key derivation (HKDF-SHA256, since v2.13) |
 | `rand` | 0.8 | Random nonce generation |
@@ -717,7 +726,6 @@ sdr-remote/
 | `serde`/`serde_json` | 1 | JSON (RF2K-S, chat, relay) |
 | `chrono` | 0.4 | Time and date in logs and chat |
 | `mcp2221-hal` | 0.1 (vendored) | MCP2221A USB-HID (tuners, rotor, paddle) |
-| `tao` | 0.34 | Window for the embedded WebView (client) |
 | `open` | 5 | Opening links in the browser (client) |
 | `windows` | 0.58 | Win32/WinRT APIs (e.g. Bluetooth PTT button, system language) |
 | `android_logger` | 0.14 | Logging to logcat (Android) |
@@ -1758,7 +1766,7 @@ catsync_fav=KiwiSDR|https://kiwisdr.example.com:8073/
 
 ### Embedded WebSDR/KiwiSDR WebView
 
-The desktop client provides an integrated WebView window (via `wry`, Win32 + WebView2) that allows websdr.org and KiwiSDR receivers to be operated directly from ThetisLink.
+On Windows the desktop client provides an integrated WebView window (via `wry`, Win32 + WebView2) that allows websdr.org and KiwiSDR receivers to be operated directly from ThetisLink.
 
 - **Frequency sync:** Tuning in ThetisLink sends the frequency (debounced, 500ms) via JavaScript injection
 - **Auto-detection:** SDR type (websdr.org or KiwiSDR) is automatically recognized

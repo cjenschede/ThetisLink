@@ -522,10 +522,17 @@ fn spe_session(
 ) -> crate::serial_link::SessionEnd {
     use crate::serial_link::SessionEnd;
 
-    // Set RTS LOW to prevent accidental power-on pulse.
-    // DTR doesn't matter for 1.3K-FA.
+    // RTS low first, so opening the port cannot become a power-on pulse.
+    // Then DTR low: Linux raises DTR when a port opens (Windows leaves it low),
+    // and with DTR high the RTS pulse does not switch the amplifier on
+    // (measured on a 1.3K-FA: the same pulse switched it on with DTR low and
+    // left it off with DTR high). In this order, because with DTR still high a
+    // short RTS rise at the open does not switch it on either.
     if let Err(e) = port.write_request_to_send(false) {
         warn!("SPE Expert: could not set RTS low: {}", e);
+    }
+    if let Err(e) = port.write_data_terminal_ready(false) {
+        warn!("SPE Expert: could not set DTR low: {}", e);
     }
 
     // Flush any stale data in the input buffer
@@ -1630,10 +1637,10 @@ mod tests {
 
     /// A port that takes no writes ends the real session with a reconnect, in
     /// the first status read and in the poll loop. (Write 1 is RTS low, write 2
-    /// the first status query, write 3 the first poll.)
+    /// DTR low, write 3 the first status query, write 4 the first poll.)
     #[test]
     fn a_dead_port_ends_the_session_with_a_reconnect() {
-        for (first_failing_write, where_) in [(0, "first status read"), (2, "poll loop")] {
+        for (first_failing_write, where_) in [(0, "first status read"), (3, "poll loop")] {
             let end = crate::serial_link::session_end_within_10s(move || {
                 let (_tx, rx) = mpsc::channel::<SpeCmd>();
                 let status = Arc::new(Mutex::new(SpeStatus::default()));
@@ -1646,5 +1653,35 @@ mod tests {
                 "a dead port in the {where_} did not end the session"
             );
         }
+    }
+
+    /// A session starts with both lines low, RTS before DTR. With DTR high (as
+    /// Linux leaves it after an open) the power-on pulse does nothing; RTS goes
+    /// first so the open itself cannot become a pulse.
+    #[test]
+    fn a_session_starts_with_rts_low_then_dtr_low() {
+        let healthy = crate::test_serial::FakeSerial::failing_writes_from(3);
+        let log = healthy.0.clone();
+        crate::serial_link::session_end_within_10s(move || {
+            let (_tx, rx) = mpsc::channel::<SpeCmd>();
+            let status = Arc::new(Mutex::new(SpeStatus::default()));
+            let mut link = crate::serial_link::Link::for_test();
+            spe_session(healthy.boxed(), &rx, &status, &mut link)
+        });
+        let l = log.lock().unwrap();
+        assert_eq!(l.rts.first(), Some(&false), "RTS is not set low first");
+        assert_eq!(l.dtr, vec![false], "DTR is not set low");
+
+        // Only the first write gets through: it must be RTS, not DTR.
+        let first_only = crate::test_serial::FakeSerial::failing_writes_from(1);
+        let log = first_only.0.clone();
+        crate::serial_link::session_end_within_10s(move || {
+            let (_tx, rx) = mpsc::channel::<SpeCmd>();
+            let status = Arc::new(Mutex::new(SpeStatus::default()));
+            let mut link = crate::serial_link::Link::for_test();
+            spe_session(first_only.boxed(), &rx, &status, &mut link)
+        });
+        let l = log.lock().unwrap();
+        assert_eq!((l.rts.as_slice(), l.dtr.as_slice()), (&[false][..], &[][..]), "DTR went low before RTS");
     }
 }

@@ -1,10 +1,10 @@
-﻿# ThetisLink v2.14.0: Installatiehandleiding
+﻿# ThetisLink v2.14.1: Installatiehandleiding
 
 ThetisLink is een remote bediening voor Thetis: audio, spectrum, PTT en volledige radiobediening over het netwerk via TCI WebSocket. Welke radio Thetis bedient, is de radio die je bedient: zie de compatibiliteit hieronder.
 
 **Compatibiliteit:** ThetisLink praat alleen met **Thetis** (via TCI WebSocket) en niet rechtstreeks met de SDR-hardware. Werkt daarom met elk SDR-apparaat dat door **Thetis v2.10.3.15** (officiële release door ramdor) ondersteund wordt: zowel HPSDR Protocol 1 (Hermes, Angelia, Orion) als HPSDR Protocol 2 (ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, Hermes-Lite 2, etc.). Optioneel: Yaesu FT-991A / FTX-1 als tweede radio (via COM-poort).
 
-**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.14.0 werkt prima met stock Thetis v2.10.3.15 via TCI alleen: er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-gedrag van stock v2.10.3.15 behouden, op een paar fixes van fouten in standaard Thetis na, die altijd gelden (zie de release-notes van de fork). Let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata. Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
+**PA3GHM Thetis fork (optioneel, aanbevolen voor TL2-extensies):** ThetisLink v2.14.1 werkt prima met stock Thetis v2.10.3.15 via TCI alleen: er is geen aparte CAT TCP verbinding nodig. De PA3GHM fork is een **optionele** vervanger die ThetisLink-specifieke TL2 `_ex` extensies toevoegt bovenop stock Thetis: uitgebreide IQ-bandbreedte tot 1536 kHz (vs de 384 kHz stock cap), `tci_caps_ex` capability-broadcast, server-side CTUN auto-recenter (`auto_recenter_ex`), filter-preset en per-RX DDC-rate push-notificaties, plus diversity auto-null met live cirkel-broadcast. Alle uitbreidingen zitten achter de **"ThetisLink extensions"** checkbox in Thetis en zijn standaard uit; met de vink uit blijft het TCI-gedrag van stock v2.10.3.15 behouden, op een paar fixes van fouten in standaard Thetis na, die altijd gelden (zie de release-notes van de fork). Let op: de fork bevat wel een eigen build-tag, release-notes en About-metadata. Zie de Gebruikershandleiding (`User-Manual.md`) voor details.
 
 **Disclaimer:** Deze software bestuurt radiozenders. Gebruik op eigen risico. De auteur is niet verantwoordelijk voor schade aan apparatuur, storing of overtredingen van regelgeving als gevolg van het gebruik van deze software. Controleer alle veiligheidsfuncties (PTT timeout, vermogensgrenzen) voor het zenden.
 
@@ -12,11 +12,13 @@ ThetisLink is een remote bediening voor Thetis: audio, spectrum, PTT en volledig
 
 ## Wat zit er in dit pakket?
 
+De twee Linux-pakketten zijn aparte downloads naast de ZIP (zie 2.9).
+
 | Bestand | Beschrijving |
 |---------|-------------|
 | ThetisLink-Server.exe | ThetisLink Server: draait op de PC naast Thetis |
 | ThetisLink-Client.exe | ThetisLink Desktop Client: Windows |
-| ThetisLink-2.14.0.apk | ThetisLink Android Client: telefoon/tablet |
+| ThetisLink-2.14.1.apk | ThetisLink Android Client: telefoon/tablet |
 | Installatie.md, Installatie.pdf | Deze handleiding (Nederlands) |
 | User-Manual.md, User-Manual.pdf | Gebruikershandleiding (Nederlands) |
 | Technische-Referentie.md, Technische-Referentie.pdf | Technische referentie (Nederlands) |
@@ -28,7 +30,7 @@ ThetisLink is een remote bediening voor Thetis: audio, spectrum, PTT en volledig
 | Apache-2.0.txt, OFL-1.1-Source-Code-Pro.txt | Licenties van de twee lettertypen in de PDF's en van de bibliotheken in de APK |
 | libopus-BSD-3-Clause.txt | Licentie van de Opus-codec (libopus) die in alle drie de programma's zit |
 | UFL-1.0.txt, Hack-Regular.txt, emoji-icon-font-MIT.txt | Licenties van de lettertypen in de server en de desktopclient |
-| WebView2-SDK.txt | Licentie van de WebView2-loader in de desktopclient |
+| WebView2-SDK.txt | Licentie van de WebView2-loader in de Windows-desktopclient |
 | sbom.spdx.json, THIRD-PARTY-LICENSES.html | De onderdelen van de programma's (SBOM) en de licentieteksten van de Rust-bibliotheken |
 | NOTICE.md, ATTRIBUTION.md | Licentie- en bronvermeldingen |
 | thetislink-relay-source.tar.gz | Broncode van de relay-server |
@@ -128,7 +130,7 @@ Geen administrator-rechten nodig voor de ThetisLink Server of ThetisLink Clients
 
 ### 1.0 PA3GHM Thetis fork installeren (aanbevolen)
 
-De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.14.0 werkt het best met Thetis-fork build PA3GHM TL2-18**, die tegelijk met ThetisLink v2.13.0 uitkwam. Eerdere fork-builds werken ook, met minder fork-only features; stock Thetis v2.10.3.15 blijft de fallback. Installatie:
+De PA3GHM fork is een aangepaste versie van Thetis met ThetisLink-specifieke uitbreidingen. **ThetisLink v2.14.1 werkt het best met Thetis-fork build PA3GHM TL2-18**, die tegelijk met ThetisLink v2.13.0 uitkwam. Eerdere fork-builds werken ook, met minder fork-only features; stock Thetis v2.10.3.15 blijft de fallback. Installatie:
 
 1. Installeer eerst de officiele **Thetis v2.10.3.15** via de standaard installer (als je dat nog niet hebt)
 2. Download `Thetis.exe` en `ChannelMaster.dll` van de PA3GHM fork: **release `TL2-18`** op [cjenschede/Thetis](https://github.com/cjenschede/Thetis/releases) (branch `thetislink-tl2`)
@@ -291,14 +293,35 @@ Nu pas verschijnt `thetislink-server.conf` naast de exe, en pas nu accepteert de
 
 Latere wijzigingen in de serverinstellingen bewaar je met opnieuw **Save & Start**.
 
-### 2.9 Server en client op Linux (v2.14.0, in ontwikkeling)
+### 2.9 Server en client op Linux (download sinds v2.14.1, in ontwikkeling)
 
-De server en de desktopclient zijn ook op Linux te bouwen en te draaien. Er is nog geen Linux-download: je bouwt ze zelf
-uit de broncode (die staat in de publieke repository, zie de README) met Rust:
+De server en de desktopclient draaien ook op Linux. Sinds v2.14.1 staat er per architectuur een pakket naast de ZIP op de
+Releases-pagina: `ThetisLink-2.14.1-linux-x86_64.tar.gz` voor een pc en `ThetisLink-2.14.1-linux-aarch64.tar.gz` voor
+64-bit ARM, zoals een Raspberry Pi 4 of 5 met het 64-bit systeem (`uname -m` zegt `aarch64`; op een 32-bit systeem
+starten de programma's niet). Ze hebben glibc 2.35 of nieuwer nodig: Ubuntu 22.04, Debian 12, Raspberry Pi OS 12 (64-bit)
+of nieuwer. Download het pakket met de browser op die machine zelf, of kopieer het erheen.
+
+```
+tar xzf ThetisLink-2.14.1-linux-aarch64.tar.gz
+cd ThetisLink-2.14.1-linux-aarch64
+./ThetisLink-Server
+```
+
+Pak het uit op een plek waar je mag schrijven: elk programma bewaart zijn instellingen in een bestand naast zichzelf. De
+server zonder opties opent zijn instellingenvenster (2.4 tot en met 2.8 gelden net als op Windows), dus de eerste start
+heeft een scherm nodig (X11 of Wayland); de client altijd. Gestart met opties (`--tci <host:poort>`, zonder venster)
+neemt de server zijn instellingen van de opdrachtregel en gebruikt uit zijn bewaarde bestand alleen het wachtwoord,
+de 2FA-sleutel en de relay; wil je draaien met wat je in het venster hebt ingesteld, start hem dan zonder opties. Seriële poorten (radio, versterker, rotor) zijn alleen open
+voor de groep `dialout`: `sudo usermod -aG dialout $USER`, en daarna opnieuw inloggen. De `README.txt` in het pakket
+noemt de bibliotheken die de programma's gebruiken; een desktop-Linux heeft ze allemaal.
+
+Je kunt ze ook zelf bouwen uit de broncode (die staat in de publieke repository, zie de README) met Rust:
 `cargo build --release --bin ThetisLink-Server --bin ThetisLink-Client`. Daarvoor zijn onder meer nodig: `pkg-config`,
-een C-compiler en de ontwikkelpakketten van ALSA, libudev en OpenSSL; Opus via `pkg-config`, of anders bouwt hij die
-zelf en dan is ook CMake nodig. De desktopclient vraagt daarnaast GTK 3 en WebKitGTK 4.1. Op een kale machine is deze
-lijst niet nagelopen.
+een C-compiler en de ontwikkelpakketten van ALSA en libudev; Opus via `pkg-config`, of anders bouwt hij die
+zelf en dan is ook CMake nodig. Op een kale machine is deze lijst niet nagelopen.
+
+De releases worden gebouwd met Rust 1.93.1. `tools/build-linux.sh` in de publieke repository bouwt zoals de releases
+gebouwd worden: Opus altijd uit zijn eigen bron, en met controles op wat eruit komt. Bovenaan staat wat hij nodig heeft.
 
 Thetis draait niet op Linux. De server op Linux werkt samen met **hpsdr-rs**, een TCI-server voor HPSDR-radio's van een
 andere maker. Beide zijn nog in ontwikkeling en niet af. De basis werkt: ontvangen, zenden, het spectrum, het volume en
@@ -371,14 +394,14 @@ Als de server zelf op de Thetis-PC draait, heeft zijn venster twee tabs: **Statu
 > Instellingen bij de processor- of systeeminformatie.
 
 **Via bestandsbeheer:**
-1. Kopieer `ThetisLink-2.14.0.apk` naar je telefoon (USB, e-mail, of cloud)
+1. Kopieer `ThetisLink-2.14.1.apk` naar je telefoon (USB, e-mail, of cloud)
 2. Open het APK-bestand op de telefoon
 3. Sta "Installeren van onbekende bronnen" toe als gevraagd
 4. Installeer
 
 **Via ADB** (met USB-debugging ingeschakeld):
 ```
-adb install ThetisLink-2.14.0.apk
+adb install ThetisLink-2.14.1.apk
 ```
 
 ### 4.2 Verbinden: begeleide setup-wizard
@@ -668,8 +691,11 @@ Controleer de integriteit van de bestanden:
 
 **Linux/macOS/Git Bash:**
 ```
-sha256sum -c SHA256SUMS.txt
+sha256sum -c --ignore-missing SHA256SUMS.txt
 ```
+
+`SHA256SUMS.txt` noemt ook de twee Linux-pakketten, die aparte downloads zijn. `--ignore-missing` slaat ze over als je ze
+niet hebt gedownload; de PowerShell-controle hieronder meldt ze dan als `MISSING`, en dat hoort zo.
 
 **PowerShell (Windows):**
 ```powershell

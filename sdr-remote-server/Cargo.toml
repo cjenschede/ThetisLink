@@ -28,18 +28,22 @@ egui = { workspace = true }
 sdr-remote-theme = { path = "../sdr-remote-theme" }
 sdr-remote-layout = { path = "../sdr-remote-layout" }
 qrcode = "0.14"
-bytemuck = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }
 rustfft = "6"
 socket2 = "0.5"
-serialport = { workspace = true }
+# usbportinfo-interface said here: the internal yaesu-key-test switched it on
+# for the whole workspace, so without this line the public tree (which leaves
+# that crate out) built another server than the release.
+serialport = { workspace = true, features = ["usbportinfo-interface"] }
 chrono = "0.4"
 tokio-tungstenite = { version = "0.24", features = ["connect"] }
 futures-util = "0.3"
-url = "2"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+# Plain http to the RF2K-S. Default features off: they would pull in the
+# platform TLS stack (OpenSSL on Linux); https for the chat goes through
+# rustls, enabled by sdr-remote-chat.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # mDNS service advertise (`_thetislink._udp.local.`) for
@@ -52,7 +56,11 @@ mdns-sd = "=0.19.1"
 # follow-up patch.
 mcp2221-hal = "0.1"
 # UI translations (rust-i18n) - EN as the base (fallback), NL/DE/FR to choose, like the client.
-rust-i18n = "3"
+# Exactly 3.1.3: from that release on the i18n! macro writes its tables in a
+# fixed order (BTreeMap); before it every fresh build came out different. 3.1.4
+# swaps the YAML parser, and that waits for its own round with every language
+# checked on every screen.
+rust-i18n = "=3.1.3"
 
 # Monitor enumeration for the "Vensters schikken" (arrange windows) grid (multi-monitor snap).
 # Only Gdi/HiDpi/Foundation needed (EnumDisplayMonitors + GetDpiForSystem).

@@ -39,9 +39,8 @@ Based on the Thetis SDR lineage (FlexRadio PowerSDR → OpenHPSDR Thetis). Upstr
 | num_enum | Enum ↔ integer derive | MIT / Apache-2.0 |
 | anyhow | Error handling | MIT / Apache-2.0 |
 | log / env_logger | Logging | MIT / Apache-2.0 |
-| bytemuck | Safe transmute for audio buffers | MIT / Apache-2.0 / Zlib |
 | hmac / sha2 / rand | Authentication (HMAC-SHA256) | MIT / Apache-2.0 |
-| wry | WebView (embedded WebSDR) | MIT / Apache-2.0 |
+| wry | WebView (embedded WebSDR, Windows) | MIT / Apache-2.0 |
 | mcp2221-hal | Adafruit MCP2221A USB-HID bridge (StockCorner JC-4s / JC-3s tuners, G-1000DXC rotor, Morse paddle): vendored, used under MIT terms | MIT / Apache-2.0 |
 
 ### Android (Kotlin)

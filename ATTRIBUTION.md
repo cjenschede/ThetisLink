@@ -92,10 +92,10 @@ The Rust dependencies are inventoried in `compliance/sbom.spdx.json`
 licensed under terms compatible with GPL-2.0-or-later. What is built in
 that cargo does not see is not in those two files: the Microsoft C runtime,
 the Rust standard library and the C++ runtime of the Android NDK (from the
-toolchains), and libopus, the fonts of egui, the WebView2 loader, HIDAPI, Oboe
+toolchains), and libopus, the fonts of egui, the WebView2 loader (Windows client), HIDAPI, Oboe
 and libffi inside JNA (from libraries). `NOTICE.md` names each of them. The
 licence texts of libopus, the fonts and the WebView2 loader travel in the
-release package from `compliance/licenses/`; the standard library's are in
+release packages from `compliance/licenses/`; the standard library's are in
 `THIRD-PARTY-LICENSES.html`; HIDAPI, used under its original licence, needs
 none.
 

@@ -1,27 +1,18 @@
-# No `targets` specified: cargo-about scans the dependency graph as
-# resolved for the current build host (typically Windows when ThetisLink
-# is being built). Platform-specific crates that don't apply on the host
-# target are omitted (e.g., Linux-only `alsa-sys`, Android-only
-# `android-*`). The full cross-platform inventory is captured in
-# `compliance/sbom.spdx.json` instead; THIRD-PARTY-LICENSES.html is the
-# per-host license-text bundle, the SBOM is the full crate inventory.
+# No `targets` specified. cargo-about 0.8.4 then lists the crates of every
+# platform, not only the build host: run on Windows, the list also names the
+# Linux-only crates (alsa-sys, wayland-client, x11-dl, libudev-sys, zbus;
+# measured 2026-11-16, all third-party crates of the Linux build). preflight
+# checks that this stays so ("licence list covers the Linux build").
+# `compliance/sbom.spdx.json` is the full crate inventory.
 #
-# cargo-about v0.8.4 caveat: the default `--threshold 0.8` lets the
-# fuzzy license-text scanner identify license-text fragments inside
-# crate sources (build.rs comments, LICENSE-orig.txt boilerplate,
-# vendored upstream headers etc.). Some of those resolve to the
-# deprecated bare `GPL-2.0` SPDX identifier which cargo-about then
-# refuses to parse, exiting non-zero. None of our actual crate-level
-# `license = ...` declarations use the bare identifier (grep over
-# `cargo metadata` confirms), so the fuzzy-scanner result is the only
-# trigger.
-#
-# Mitigation: regenerate with `--threshold 1.0` so cargo-about only
-# trusts exact license-text matches and drops the noisy file scans.
-# The compliance regeneration:
-#   cargo about generate about.hbs -o compliance/THIRD-PARTY-LICENSES.html --threshold 1.0
-# Output is the per-host license-text bundle; the SBOM (regen via
-# `cargo sbom > compliance/sbom.spdx.json`) is the full crate inventory.
+# The regeneration at a release, at the default threshold, the same command
+# preflight compares against:
+#   cargo about generate about.hbs -o compliance/THIRD-PARTY-LICENSES.html
+# Not `--threshold 1.0`: that gives a list well over a thousand lines shorter,
+# which preflight then rejects. At the default threshold cargo-about prints
+# "ERROR failed to parse license 'GPL-2.0'" (its file scanner reads a deprecated
+# bare identifier in some crate's sources) and still exits 0; the list is
+# complete. No crate in the tree declares the bare `GPL-2.0` identifier.
 #
 # The Ubuntu Font License 1.0 (UFL-1.0) attached to epaint_default_fonts
 # has no standard SPDX identifier; we clarify the crate's expression
@@ -69,11 +60,12 @@ checksum = "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
 
 # unescaper 0.1.8 declares `license = "GPL-3.0/MIT"` (deprecated slash form,
 # with the bare `GPL-3.0` identifier that SPDX has deprecated in favour of
-# `GPL-3.0-only` or `GPL-3.0-or-later`). cargo-about can't parse this in
-# 0.8.4+. We're pulling unescaper transitively via `serialport`; we choose
-# the MIT branch of the dual-licence; MIT is compatible with our
-# `GPL-2.0-or-later` distribution and avoids the GPL-3 propagation
-# question entirely.
+# `GPL-3.0-only` or `GPL-3.0-or-later`). cargo-about 0.8.4 reads it and picks
+# MIT on its own (measured 2026-11-17: without this clarification the list is
+# byte for byte the same), so this is not a parse fix. It records the choice:
+# we pull unescaper in through `serialport` and use the MIT branch of the dual
+# licence, which is compatible with our `GPL-2.0-or-later` distribution and
+# keeps the GPL-3 question out entirely, also for a stricter cargo-about.
 [unescaper.clarify]
 license = "MIT"
 override-git-commit = "0.1.8"
@@ -86,18 +78,21 @@ checksum = "6e0bad263cbd2aa6235d78e3c26bcfa2668cf32f6b274ae21ce0dd620114c7b3"
 # hidapi 2.6.6 declares `license = "MIT"` in its Cargo.toml but ships
 # triple-licensing text files in `etc/hidapi/` (LICENSE.txt naming all
 # three, plus LICENSE-bsd.txt, LICENSE-gpl3.txt, LICENSE-orig.txt).
-# cargo-about scans these and re-derives a GPL-3.0 expression that uses
-# the deprecated bare identifier, causing a parse error in 0.8.4. We
-# pin the expression to MIT (matching the crate's own Cargo.toml choice)
-# and point at LICENSE.txt as the canonical text.
+# Its own Cargo.toml says MIT, and cargo-about 0.8.4 keeps that without this
+# clarification too (measured 2026-11-17). What the clarification adds is
+# the text: it points at two files, etc/hidapi/LICENSE.txt (the notice of
+# the bundled C library) and the crate's own LICENSE.txt, and without it the
+# notice of the C library is not in the list.
 #
-# Note on the rendered text: LICENSE.txt is hidapi's own canonical license
-# file and reproduces the full tri-license *notice* (MIT / BSD / GPL-3 all
-# offered by upstream), not a MIT-only excerpt. We reproduce that notice
-# verbatim rather than substitute a trimmed MIT-only file, so the attribution
-# stays faithful to exactly what upstream ships; our SPDX selection (MIT, the
-# permissive branch the crate itself declares) governs how we use it. Both the
-# selection and the verbatim upstream notice are therefore correct.
+# Note on the rendered text: etc/hidapi/LICENSE.txt is the notice of the bundled
+# C library, offering three licences; which one ThetisLink uses for that C code
+# is stated in NOTICE.md (the original HIDAPI licence), not here. The MIT
+# selection above is the Rust crate's own licence.
+#
+# If a new hidapi version changes either file, the checksum no longer matches
+# and cargo-about drops this WHOLE clarification with only a warning; the C
+# library's notice then silently leaves the list. preflight therefore requires
+# both texts in the committed list ("licence texts that must stay in the list").
 [hidapi.clarify]
 license = "MIT"
 override-git-commit = "2.6.6"
@@ -106,3 +101,11 @@ override-git-commit = "2.6.6"
 path = "etc/hidapi/LICENSE.txt"
 license = "MIT"
 checksum = "7d3b087c34f35d4d538e3bcddd1ff8f66e92f9ef336881999482800ddf840913"
+
+# The crate's own MIT text ("Copyright 2017 The hidapi-rs Developers"). The entry
+# above is the licence statement of the bundled C library; without this one the
+# MIT text of the Rust crate itself was missing from THIRD-PARTY-LICENSES.html.
+[[hidapi.clarify.files]]
+path = "LICENSE.txt"
+license = "MIT"
+checksum = "778d971f6152990cee1644e7aadcd51a68050dd73f76463c5a9c1863ca495d73"

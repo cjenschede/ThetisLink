@@ -30,7 +30,7 @@ pub mod stream;
 pub use log as __log;
 
 /// ThetisLink version - shared by server and client
-pub const VERSION: &str = "2.14.0";
+pub const VERSION: &str = "2.14.1";
 
 /// Build number for dev builds - displayed alongside version for testing.
 /// Set to None for release builds (only show version).

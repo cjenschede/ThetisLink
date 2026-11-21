@@ -28,7 +28,11 @@ eframe = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
 # The one line, shared with the client and the server GUI.
 sdr-remote-theme = { path = "../sdr-remote-theme", optional = true }
-rust-i18n = "3"
+# Exactly 3.1.3: from that release on the i18n! macro writes its tables in a
+# fixed order (BTreeMap); before it every fresh build came out different. 3.1.4
+# swaps the YAML parser, and that waits for its own round with every language
+# checked on every screen.
+rust-i18n = "=3.1.3"
 # rustls with the bundled Mozilla roots, like the relay client next door: the
 # platform TLS stack would mean OpenSSL on Android, and the two halves of one
 # connection should not disagree about which certificates exist.

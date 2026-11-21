@@ -4,7 +4,7 @@
 //!
 //! Uses the Windows Audio Session API (WASAPI) to mute/unmute audio sessions of
 //! browsers (Chrome, Firefox, Edge) when PTT is active.
-//! Optional: embedded WebView via wry for direct JS control over WebSDR.
+//! Optional, on Windows: embedded WebView via wry for direct JS control over WebSDR.
 
 use std::time::Instant;
 

@@ -1463,7 +1463,6 @@ impl eframe::App for ServerApp {
                         ui.label(RichText::new("Protocols & External Services").size(13.0).strong());
                         ui.label("TCI: Expert Electronics / Thetis");
                         ui.label("DX Spider: DX cluster telnet protocol");
-                        ui.label("WebSDR (PA3FWM) / KiwiSDR: CatSync targets");
                         ui.label("ThetisLink Relay: self-hosted WebSocket + UDP relay (internet remote)");
                         ui.label("ThetisLink Chat: optional service beside a relay (chat + problem reports)");
                         ui.add_space(6.0);

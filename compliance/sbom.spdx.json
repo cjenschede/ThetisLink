@@ -1,20 +1,20 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
   "creationInfo": {
-    "created": "2026-11-14T14:03:28Z",
+    "created": "2026-11-20T22:59:35Z",
     "creators": [
       "Tool: cargo-sbom-v0.10.0"
     ]
   },
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://spdx.org/spdxdocs/sdr-remote-9187733d-3e67-4477-85cb-c68119a94b64",
+  "documentNamespace": "https://spdx.org/spdxdocs/sdr-remote-bump-210fe46d-c6da-4b5f-bec2-f5f10ca9412d",
   "files": [
     {
       "SPDXID": "SPDXRef-File-ThetisLink-Client",
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -28,7 +28,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -42,7 +42,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -56,7 +56,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -70,7 +70,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -84,7 +84,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -98,7 +98,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -112,7 +112,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -126,7 +126,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -140,7 +140,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -154,7 +154,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -168,7 +168,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -182,7 +182,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -196,7 +196,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -210,7 +210,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -224,7 +224,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "a88a778fa529268d26450ff634907cc9e3d9f3a1"
+          "checksumValue": "22fbc0aee53aeea9e0979dcf0328e7272de9230c"
         }
       ],
       "fileName": ".\\Cargo.lock",
@@ -234,7 +234,7 @@
       ]
     }
   ],
-  "name": "sdr-remote",
+  "name": "sdr-remote-bump",
   "packages": [
     {
       "SPDXID": "SPDXRef-Package-ab--glyph--rasterizer-0.1.10",
@@ -2095,22 +2095,6 @@
       "versionInfo": "0.23.2"
     },
     {
-      "SPDXID": "SPDXRef-Package-core-graphics-0.25.0",
-      "description": "Bindings to Core Graphics for macOS",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/core-graphics@0.25.0",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "core-graphics",
-      "versionInfo": "0.25.0"
-    },
-    {
       "SPDXID": "SPDXRef-Package-core-graphics-types-0.1.3",
       "description": "Bindings for some fundamental Core Graphics types",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -2126,23 +2110,6 @@
       "licenseDeclared": "MIT OR Apache-2.0",
       "name": "core-graphics-types",
       "versionInfo": "0.1.3"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-core-graphics-types-0.2.0",
-      "description": "Bindings for some fundamental Core Graphics types",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/core-graphics-types@0.2.0",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://github.com/servo/core-foundation-rs",
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "core-graphics-types",
-      "versionInfo": "0.2.0"
     },
     {
       "SPDXID": "SPDXRef-Package-coreaudio-rs-0.11.3",
@@ -2586,38 +2553,6 @@
       "versionInfo": "0.5.3"
     },
     {
-      "SPDXID": "SPDXRef-Package-dlopen2--derive-0.4.3",
-      "description": "Derive macros for the dlopen2 crate.",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/dlopen2_derive@0.4.3",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "name": "dlopen2_derive",
-      "versionInfo": "0.4.3"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-dlopen2-0.8.2",
-      "description": "Library for opening and operating on dynamic link libraries (also known as shared objects or shared libraries).",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/dlopen2@0.8.2",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "name": "dlopen2",
-      "versionInfo": "0.8.2"
-    },
-    {
       "SPDXID": "SPDXRef-Package-document-features-0.2.12",
       "description": "Extract documentation for the feature flags from comments in Cargo.toml",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -2881,23 +2816,6 @@
       "licenseDeclared": "MIT OR Apache-2.0",
       "name": "embedded-hal",
       "versionInfo": "1.0.0"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-encoding--rs-0.8.35",
-      "description": "A Gecko-oriented implementation of the Encoding Standard",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/encoding_rs@0.8.35",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://docs.rs/encoding_rs/",
-      "licenseConcluded": "(Apache-2.0 OR MIT) AND BSD-3-Clause",
-      "licenseDeclared": "(Apache-2.0 OR MIT) AND BSD-3-Clause",
-      "name": "encoding_rs",
-      "versionInfo": "0.8.35"
     },
     {
       "SPDXID": "SPDXRef-Package-endi-1.1.1",
@@ -3224,22 +3142,6 @@
       "versionInfo": "0.11.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-fnv-1.0.7",
-      "description": "Fowler–Noll–Vo hash function",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/fnv@1.0.7",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "Apache-2.0 OR MIT",
-      "licenseDeclared": "Apache-2.0 OR MIT",
-      "name": "fnv",
-      "versionInfo": "1.0.7"
-    },
-    {
       "SPDXID": "SPDXRef-Package-foldhash-0.1.5",
       "description": "A fast, non-cryptographic, minimally DoS-resistant hashing algorithm.",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -3272,22 +3174,6 @@
       "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-foreign-types-0.3.2",
-      "description": "A framework for Rust wrappers over C APIs",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/foreign-types@0.3.2",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "foreign-types",
-      "versionInfo": "0.3.2"
-    },
-    {
       "SPDXID": "SPDXRef-Package-foreign-types-0.5.0",
       "description": "A framework for Rust wrappers over C APIs",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -3318,22 +3204,6 @@
       "licenseDeclared": "MIT OR Apache-2.0",
       "name": "foreign-types-macros",
       "versionInfo": "0.2.3"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-foreign-types-shared-0.1.1",
-      "description": "An internal crate used by foreign-types",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/foreign-types-shared@0.1.1",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "foreign-types-shared",
-      "versionInfo": "0.1.1"
     },
     {
       "SPDXID": "SPDXRef-Package-foreign-types-shared-0.3.1",
@@ -3602,23 +3472,6 @@
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
       "name": "gdk-sys",
-      "versionInfo": "0.18.2"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-gdkwayland-sys-0.18.2",
-      "description": "UNMAINTAINED FFI bindings to libgdk-3-wayland (use gdk4-wayland-sys instead)",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/gdkwayland-sys@0.18.2",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://gtk-rs.org/",
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "name": "gdkwayland-sys",
       "versionInfo": "0.18.2"
     },
     {
@@ -4155,22 +4008,6 @@
       "versionInfo": "0.18.2"
     },
     {
-      "SPDXID": "SPDXRef-Package-h2-0.4.19",
-      "description": "An HTTP/2 client and server",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/h2@0.4.19",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "name": "h2",
-      "versionInfo": "0.4.19"
-    },
-    {
       "SPDXID": "SPDXRef-Package-hashbrown-0.14.5",
       "description": "A Rust port of Google's SwissTable hash map",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -4511,23 +4348,6 @@
       "licenseDeclared": "Apache-2.0 OR ISC OR MIT",
       "name": "hyper-rustls",
       "versionInfo": "0.27.9"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-hyper-tls-0.6.0",
-      "description": "Default TLS implementation for use with hyper",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/hyper-tls@0.6.0",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://hyper.rs",
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "hyper-tls",
-      "versionInfo": "0.6.0"
     },
     {
       "SPDXID": "SPDXRef-Package-hyper-util-0.1.20",
@@ -5266,13 +5086,13 @@
       "versionInfo": "0.1.4"
     },
     {
-      "SPDXID": "SPDXRef-Package-libyml-0.0.4",
-      "description": "A safe and efficient Rust library for parsing and emitting YAML data",
+      "SPDXID": "SPDXRef-Package-libyml-0.0.5",
+      "description": "A safe and efficient Rust library for parsing, emitting, and manipulating YAML data.",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/libyml@0.0.4",
+          "referenceLocator": "pkg:cargo/libyml@0.0.5",
           "referenceType": "purl"
         }
       ],
@@ -5280,7 +5100,7 @@
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
       "name": "libyml",
-      "versionInfo": "0.0.4"
+      "versionInfo": "0.0.5"
     },
     {
       "SPDXID": "SPDXRef-Package-linux-raw-sys-0.12.1",
@@ -6561,23 +6381,6 @@
       "versionInfo": "22.1.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-native-tls-0.2.18",
-      "description": "A wrapper over a platform's native TLS implementation",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/native-tls@0.2.18",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://lib.rs/crates/native-tls",
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "native-tls",
-      "versionInfo": "0.2.18"
-    },
-    {
       "SPDXID": "SPDXRef-Package-ndk-0.8.0",
       "description": "Safe Rust bindings to the Android NDK",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -7405,71 +7208,6 @@
       "versionInfo": "5.3.5"
     },
     {
-      "SPDXID": "SPDXRef-Package-openssl-0.10.80",
-      "description": "OpenSSL bindings",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/openssl@0.10.80",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "Apache-2.0",
-      "licenseDeclared": "Apache-2.0",
-      "name": "openssl",
-      "versionInfo": "0.10.80"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-openssl-macros-0.1.1",
-      "description": "Internal macros used by the openssl crate.",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/openssl-macros@0.1.1",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "openssl-macros",
-      "versionInfo": "0.1.1"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-openssl-probe-0.2.1",
-      "description": "A library for helping to find system-wide trust anchor (\"root\") certificate\nlocations based on paths typically used by `openssl`.\n",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/openssl-probe@0.2.1",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://github.com/rustls/openssl-probe",
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "openssl-probe",
-      "versionInfo": "0.2.1"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-openssl-sys-0.9.116",
-      "description": "FFI bindings to OpenSSL",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/openssl-sys@0.9.116",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "name": "openssl-sys",
-      "versionInfo": "0.9.116"
-    },
-    {
       "SPDXID": "SPDXRef-Package-option-ext-0.2.0",
       "description": "Extends `Option` with additional operations",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -8022,20 +7760,20 @@
       "versionInfo": "1.3.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-proc-macro-crate-2.0.2",
+      "SPDXID": "SPDXRef-Package-proc-macro-crate-2.0.0",
       "description": "Replacement for crate (macro_rules keyword) in proc-macros\n",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/proc-macro-crate@2.0.2",
+          "referenceLocator": "pkg:cargo/proc-macro-crate@2.0.0",
           "referenceType": "purl"
         }
       ],
       "licenseConcluded": "MIT OR Apache-2.0",
       "licenseDeclared": "MIT OR Apache-2.0",
       "name": "proc-macro-crate",
-      "versionInfo": "2.0.2"
+      "versionInfo": "2.0.0"
     },
     {
       "SPDXID": "SPDXRef-Package-proc-macro-crate-3.5.0",
@@ -8643,52 +8381,52 @@
       "versionInfo": "0.32.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-rust-i18n-3.1.2",
+      "SPDXID": "SPDXRef-Package-rust-i18n-3.1.3",
       "description": "Rust I18n is use Rust codegen for load YAML file storage translations on compile time, and give you a t! macro for simply get translation texts.",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/rust-i18n@3.1.2",
+          "referenceLocator": "pkg:cargo/rust-i18n@3.1.3",
           "referenceType": "purl"
         }
       ],
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
       "name": "rust-i18n",
-      "versionInfo": "3.1.2"
+      "versionInfo": "3.1.3"
     },
     {
-      "SPDXID": "SPDXRef-Package-rust-i18n-macro-3.1.2",
+      "SPDXID": "SPDXRef-Package-rust-i18n-macro-3.1.3",
       "description": "Macro for rust-i18n crate.",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/rust-i18n-macro@3.1.2",
+          "referenceLocator": "pkg:cargo/rust-i18n-macro@3.1.3",
           "referenceType": "purl"
         }
       ],
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
       "name": "rust-i18n-macro",
-      "versionInfo": "3.1.2"
+      "versionInfo": "3.1.3"
     },
     {
-      "SPDXID": "SPDXRef-Package-rust-i18n-support-3.1.2",
+      "SPDXID": "SPDXRef-Package-rust-i18n-support-3.1.3",
       "description": "Support for rust-i18n crate.",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/rust-i18n-support@3.1.2",
+          "referenceLocator": "pkg:cargo/rust-i18n-support@3.1.3",
           "referenceType": "purl"
         }
       ],
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
       "name": "rust-i18n-support",
-      "versionInfo": "3.1.2"
+      "versionInfo": "3.1.3"
     },
     {
       "SPDXID": "SPDXRef-Package-rustc-hash-1.1.0",
@@ -8870,22 +8608,6 @@
       "versionInfo": "1.0.6"
     },
     {
-      "SPDXID": "SPDXRef-Package-schannel-0.1.29",
-      "description": "Schannel bindings for rust, allowing SSL/TLS (e.g. https) without openssl",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/schannel@0.1.29",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "name": "schannel",
-      "versionInfo": "0.1.29"
-    },
-    {
       "SPDXID": "SPDXRef-Package-scoped-tls-1.0.1",
       "description": "Library implementation of the standard library's old `scoped_thread_local!`\nmacro for providing scoped access to thread local storage (TLS) so any type can\nbe stored into TLS.\n",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -8967,36 +8689,36 @@
       "versionInfo": "0.10.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-sdr-remote-android-2.14.0",
+      "SPDXID": "SPDXRef-Package-sdr-remote-android-2.14.1",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-2.0-or-later",
       "licenseDeclared": "GPL-2.0-or-later",
       "name": "sdr-remote-android",
-      "versionInfo": "2.14.0"
+      "versionInfo": "2.14.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-sdr-remote-chat-2.14.0",
+      "SPDXID": "SPDXRef-Package-sdr-remote-chat-2.14.1",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-2.0-or-later",
       "licenseDeclared": "GPL-2.0-or-later",
       "name": "sdr-remote-chat",
-      "versionInfo": "2.14.0"
+      "versionInfo": "2.14.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-sdr-remote-client-2.14.0",
+      "SPDXID": "SPDXRef-Package-sdr-remote-client-2.14.1",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-2.0-or-later",
       "licenseDeclared": "GPL-2.0-or-later",
       "name": "sdr-remote-client",
-      "versionInfo": "2.14.0"
+      "versionInfo": "2.14.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-sdr-remote-core-2.14.0",
+      "SPDXID": "SPDXRef-Package-sdr-remote-core-2.14.1",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-2.0-or-later",
       "licenseDeclared": "GPL-2.0-or-later",
       "name": "sdr-remote-core",
-      "versionInfo": "2.14.0"
+      "versionInfo": "2.14.1"
     },
     {
       "SPDXID": "SPDXRef-Package-sdr-remote-layout-0.1.0",
@@ -9007,36 +8729,36 @@
       "versionInfo": "0.1.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-sdr-remote-logic-2.14.0",
+      "SPDXID": "SPDXRef-Package-sdr-remote-logic-2.14.1",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-2.0-or-later",
       "licenseDeclared": "GPL-2.0-or-later",
       "name": "sdr-remote-logic",
-      "versionInfo": "2.14.0"
+      "versionInfo": "2.14.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-sdr-remote-quic-2.14.0",
+      "SPDXID": "SPDXRef-Package-sdr-remote-quic-2.14.1",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-2.0-or-later",
       "licenseDeclared": "GPL-2.0-or-later",
       "name": "sdr-remote-quic",
-      "versionInfo": "2.14.0"
+      "versionInfo": "2.14.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-sdr-remote-relay-2.14.0",
+      "SPDXID": "SPDXRef-Package-sdr-remote-relay-2.14.1",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-2.0-or-later",
       "licenseDeclared": "GPL-2.0-or-later",
       "name": "sdr-remote-relay",
-      "versionInfo": "2.14.0"
+      "versionInfo": "2.14.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-sdr-remote-server-2.14.0",
+      "SPDXID": "SPDXRef-Package-sdr-remote-server-2.14.1",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-2.0-or-later",
       "licenseDeclared": "GPL-2.0-or-later",
       "name": "sdr-remote-server",
-      "versionInfo": "2.14.0"
+      "versionInfo": "2.14.1"
     },
     {
       "SPDXID": "SPDXRef-Package-sdr-remote-theme-0.1.0",
@@ -9045,40 +8767,6 @@
       "licenseDeclared": "GPL-2.0-or-later",
       "name": "sdr-remote-theme",
       "versionInfo": "0.1.0"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-security-framework-3.7.0",
-      "description": "Security.framework bindings for macOS and iOS",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/security-framework@3.7.0",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://lib.rs/crates/security_framework",
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "security-framework",
-      "versionInfo": "3.7.0"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-security-framework-sys-2.17.0",
-      "description": "Apple `Security.framework` low-level FFI bindings",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/security-framework-sys@2.17.0",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://lib.rs/crates/security-framework-sys",
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "security-framework-sys",
-      "versionInfo": "2.17.0"
     },
     {
       "SPDXID": "SPDXRef-Package-selectors-0.36.1",
@@ -9227,13 +8915,13 @@
       "versionInfo": "0.7.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-serde--yml-0.0.11",
+      "SPDXID": "SPDXRef-Package-serde--yml-0.0.12",
       "description": "A robust Rust library that simplifies the serialization and deserialization of Rust data structures to and from YAML format using the widely-used Serde framework.\n",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/serde_yml@0.0.11",
+          "referenceLocator": "pkg:cargo/serde_yml@0.0.12",
           "referenceType": "purl"
         }
       ],
@@ -9241,7 +8929,7 @@
       "licenseConcluded": "MIT OR Apache-2.0",
       "licenseDeclared": "MIT OR Apache-2.0",
       "name": "serde_yml",
-      "versionInfo": "0.0.11"
+      "versionInfo": "0.0.12"
     },
     {
       "SPDXID": "SPDXRef-Package-serde-1.0.228",
@@ -9882,54 +9570,6 @@
       "versionInfo": "0.13.2"
     },
     {
-      "SPDXID": "SPDXRef-Package-system-configuration-0.7.0",
-      "description": "Bindings to SystemConfiguration framework for macOS",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/system-configuration@0.7.0",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "system-configuration",
-      "versionInfo": "0.7.0"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-system-configuration-sys-0.6.0",
-      "description": "Low level bindings to SystemConfiguration framework for macOS",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/system-configuration-sys@0.6.0",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "system-configuration-sys",
-      "versionInfo": "0.6.0"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-tao-0.34.8",
-      "description": "Cross-platform window manager library.",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/tao@0.34.8",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "Apache-2.0",
-      "licenseDeclared": "Apache-2.0",
-      "name": "tao",
-      "versionInfo": "0.34.8"
-    },
-    {
       "SPDXID": "SPDXRef-Package-tao-macros-0.1.3",
       "description": "Proc macros for tao",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -10271,23 +9911,6 @@
       "versionInfo": "2.7.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-tokio-native-tls-0.3.1",
-      "description": "An implementation of TLS/SSL streams for Tokio using native-tls giving an implementation of TLS\nfor nonblocking I/O streams.\n",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/tokio-native-tls@0.3.1",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://tokio.rs",
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "name": "tokio-native-tls",
-      "versionInfo": "0.3.1"
-    },
-    {
       "SPDXID": "SPDXRef-Package-tokio-rustls-0.26.4",
       "description": "Asynchronous TLS/SSL streams for Tokio using Rustls.",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -10322,38 +9945,20 @@
       "versionInfo": "0.24.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-tokio-util-0.7.18",
-      "description": "Additional utilities for working with Tokio.\n",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/tokio-util@0.7.18",
-          "referenceType": "purl"
-        }
-      ],
-      "homepage": "https://tokio.rs",
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "name": "tokio-util",
-      "versionInfo": "0.7.18"
-    },
-    {
-      "SPDXID": "SPDXRef-Package-toml--datetime-0.6.3",
+      "SPDXID": "SPDXRef-Package-toml--datetime-0.6.11",
       "description": "A TOML-compatible datetime type",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/toml_datetime@0.6.3",
+          "referenceLocator": "pkg:cargo/toml_datetime@0.6.11",
           "referenceType": "purl"
         }
       ],
-      "homepage": "https://github.com/toml-rs/toml",
       "licenseConcluded": "MIT OR Apache-2.0",
       "licenseDeclared": "MIT OR Apache-2.0",
       "name": "toml_datetime",
-      "versionInfo": "0.6.3"
+      "versionInfo": "0.6.11"
     },
     {
       "SPDXID": "SPDXRef-Package-toml--datetime-1.1.1-plus-spec-1.1.0",
@@ -10404,6 +10009,22 @@
       "versionInfo": "0.20.2"
     },
     {
+      "SPDXID": "SPDXRef-Package-toml--edit-0.22.27",
+      "description": "Yet another format-preserving TOML parser.",
+      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:cargo/toml_edit@0.22.27",
+          "referenceType": "purl"
+        }
+      ],
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "name": "toml_edit",
+      "versionInfo": "0.22.27"
+    },
+    {
       "SPDXID": "SPDXRef-Package-toml--edit-0.25.12-plus-spec-1.1.0",
       "description": "Yet another format-preserving TOML parser.",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -10436,6 +10057,22 @@
       "versionInfo": "1.1.2+spec-1.1.0"
     },
     {
+      "SPDXID": "SPDXRef-Package-toml--write-0.1.2",
+      "description": "A low-level interface for writing out TOML\n",
+      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:cargo/toml_write@0.1.2",
+          "referenceType": "purl"
+        }
+      ],
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "name": "toml_write",
+      "versionInfo": "0.1.2"
+    },
+    {
       "SPDXID": "SPDXRef-Package-toml-0.5.11",
       "description": "A native Rust encoder and decoder of TOML-formatted files and streams. Provides\nimplementations of the standard Serialize/Deserialize traits for TOML data to\nfacilitate deserializing and serializing Rust structures.\n",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -10453,21 +10090,20 @@
       "versionInfo": "0.5.11"
     },
     {
-      "SPDXID": "SPDXRef-Package-toml-0.7.8",
+      "SPDXID": "SPDXRef-Package-toml-0.8.23",
       "description": "A native Rust encoder and decoder of TOML-formatted files and streams. Provides\nimplementations of the standard Serialize/Deserialize traits for TOML data to\nfacilitate deserializing and serializing Rust structures.\n",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/toml@0.7.8",
+          "referenceLocator": "pkg:cargo/toml@0.8.23",
           "referenceType": "purl"
         }
       ],
-      "homepage": "https://github.com/toml-rs/toml",
       "licenseConcluded": "MIT OR Apache-2.0",
       "licenseDeclared": "MIT OR Apache-2.0",
       "name": "toml",
-      "versionInfo": "0.7.8"
+      "versionInfo": "0.8.23"
     },
     {
       "SPDXID": "SPDXRef-Package-totp-lite-2.0.1",
@@ -12621,22 +12257,6 @@
       "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-windows-registry-0.6.1",
-      "description": "Windows registry",
-      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceLocator": "pkg:cargo/windows-registry@0.6.1",
-          "referenceType": "purl"
-        }
-      ],
-      "licenseConcluded": "MIT OR Apache-2.0",
-      "licenseDeclared": "MIT OR Apache-2.0",
-      "name": "windows-registry",
-      "versionInfo": "0.6.1"
-    },
-    {
       "SPDXID": "SPDXRef-Package-windows-result-0.1.2",
       "description": "Windows error handling",
       "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
@@ -12939,6 +12559,22 @@
       "licenseDeclared": "MIT",
       "name": "winnow",
       "versionInfo": "0.5.40"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-winnow-0.7.15",
+      "description": "A byte-oriented, zero-copy, parser combinators library",
+      "downloadLocation": "registry+https://github.com/rust-lang/crates.io-index",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:cargo/winnow@0.7.15",
+          "referenceType": "purl"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "name": "winnow",
+      "versionInfo": "0.7.15"
     },
     {
       "SPDXID": "SPDXRef-Package-winnow-1.0.3",
@@ -13665,12 +13301,12 @@
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-client-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-client-2.14.1",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-ThetisLink-Client"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-server-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-server-2.14.1",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-ThetisLink-Server"
     },
@@ -13680,12 +13316,12 @@
       "spdxElementId": "SPDXRef-File-mcp2221-test"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-chat-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-chat-2.14.1",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-sdr_remote_chat"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.1",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-sdr_remote_core"
     },
@@ -13695,17 +13331,17 @@
       "spdxElementId": "SPDXRef-File-sdr_remote_layout"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-logic-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-logic-2.14.1",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-sdr_remote_logic"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-quic-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-quic-2.14.1",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-sdr_remote_quic"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.1",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-sdr_remote_relay"
     },
@@ -13725,7 +13361,7 @@
       "spdxElementId": "SPDXRef-File-thetislink-relay"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-android-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-android-2.14.1",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-uniffi-bindgen"
     },
@@ -14095,7 +13731,7 @@
       "spdxElementId": "SPDXRef-Package-anstyle-parse-1.0.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.60.2",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-anstyle-query-1.1.5"
     },
@@ -14110,7 +13746,7 @@
       "spdxElementId": "SPDXRef-Package-anstyle-wincon-3.0.11"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.60.2",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-anstyle-wincon-3.0.11"
     },
@@ -15310,31 +14946,6 @@
       "spdxElementId": "SPDXRef-Package-core-graphics-0.23.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bitflags-2.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-core-graphics-0.25.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-foundation-0.10.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-core-graphics-0.25.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-graphics-types-0.2.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-core-graphics-0.25.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-foreign-types-0.5.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-core-graphics-0.25.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-core-graphics-0.25.0"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-bitflags-1.3.2",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-core-graphics-types-0.1.3"
@@ -15348,21 +14959,6 @@
       "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-core-graphics-types-0.1.3"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-bitflags-2.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-core-graphics-types-0.2.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-foundation-0.10.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-core-graphics-types-0.2.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-core-graphics-types-0.2.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-bitflags-1.3.2",
@@ -15615,22 +15211,12 @@
       "spdxElementId": "SPDXRef-Package-dirs-sys-0.5.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.60.2",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-dirs-sys-0.5.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-bitflags-2.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-dispatch2-0.3.1"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-block2-0.6.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-dispatch2-0.3.1"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-dispatch2-0.3.1"
     },
@@ -15658,41 +15244,6 @@
       "relatedSpdxElement": "SPDXRef-Package-libloading-0.8.9",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-dlib-0.5.3"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-proc-macro2-1.0.106",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-dlopen2--derive-0.4.3"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-quote-1.0.45",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-dlopen2--derive-0.4.3"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-syn-2.0.117",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-dlopen2--derive-0.4.3"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-dlopen2--derive-0.4.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-dlopen2-0.8.2"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-dlopen2-0.8.2"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-once--cell-1.21.4",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-dlopen2-0.8.2"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-winapi-0.3.9",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-dlopen2-0.8.2"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-litrs-1.0.0",
@@ -16070,11 +15621,6 @@
       "spdxElementId": "SPDXRef-Package-emath-0.29.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-cfg-if-1.0.4",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-encoding--rs-0.8.35"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-proc-macro2-1.0.106",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-enumflags2--derive-0.7.12"
@@ -16195,7 +15741,7 @@
       "spdxElementId": "SPDXRef-Package-errno-0.3.14"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.52.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-errno-0.3.14"
     },
@@ -16258,11 +15804,6 @@
       "relatedSpdxElement": "SPDXRef-Package-spin-0.9.8",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-flume-0.11.1"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-foreign-types-shared-0.1.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-foreign-types-0.3.2"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-foreign-types-macros-0.2.3",
@@ -16513,26 +16054,6 @@
       "relatedSpdxElement": "SPDXRef-Package-pango-sys-0.18.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-gdk-sys-0.18.2"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-gdk-sys-0.18.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-gdkwayland-sys-0.18.2"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-glib-sys-0.18.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-gdkwayland-sys-0.18.2"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-gobject-sys-0.18.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-gdkwayland-sys-0.18.2"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-gdkwayland-sys-0.18.2"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-gdk-0.18.2",
@@ -16835,7 +16356,7 @@
       "spdxElementId": "SPDXRef-Package-glib-macros-0.18.5"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-proc-macro-crate-2.0.2",
+      "relatedSpdxElement": "SPDXRef-Package-proc-macro-crate-2.0.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-glib-macros-0.18.5"
     },
@@ -17265,61 +16786,6 @@
       "spdxElementId": "SPDXRef-Package-gtk3-macros-0.18.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-atomic-waker-1.1.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-bytes-1.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-fnv-1.0.7",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-futures-core-0.3.32",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-futures-sink-0.3.32",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-http-1.4.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-indexmap-2.14.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-slab-0.4.12",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tokio-util-0.7.18",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-h2-0.4.19"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-ahash-0.8.12",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-hashbrown-0.14.5"
@@ -17470,11 +16936,6 @@
       "spdxElementId": "SPDXRef-Package-hyper-1.10.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-h2-0.4.19",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-1.10.1"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-http-1.4.1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-hyper-1.10.1"
@@ -17560,46 +17021,6 @@
       "spdxElementId": "SPDXRef-Package-hyper-rustls-0.27.9"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bytes-1.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-tls-0.6.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-http-body-util-0.1.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-tls-0.6.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-hyper-1.10.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-tls-0.6.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-hyper-util-0.1.20",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-tls-0.6.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-native-tls-0.2.18",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-tls-0.6.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-tls-0.6.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tokio-native-tls-0.3.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-tls-0.6.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tower-service-0.3.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-tls-0.6.0"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-base64-0.22.1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-hyper-util-0.1.20"
@@ -17660,11 +17081,6 @@
       "spdxElementId": "SPDXRef-Package-hyper-util-0.1.20"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-system-configuration-0.7.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-util-0.1.20"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-hyper-util-0.1.20"
@@ -17676,11 +17092,6 @@
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-hyper-util-0.1.20"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-windows-registry-0.6.1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-hyper-util-0.1.20"
     },
@@ -18285,6 +17696,11 @@
       "spdxElementId": "SPDXRef-Package-libudev-sys-0.1.4"
     },
     {
+      "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-libyml-0.0.5"
+    },
+    {
       "relatedSpdxElement": "SPDXRef-Package-scopeguard-1.2.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-lock--api-0.4.14"
@@ -18585,51 +18001,6 @@
       "spdxElementId": "SPDXRef-Package-naga-22.1.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-native-tls-0.2.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-native-tls-0.2.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-openssl-0.10.80",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-native-tls-0.2.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-openssl-probe-0.2.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-native-tls-0.2.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-openssl-sys-0.9.116",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-native-tls-0.2.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-schannel-0.1.29",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-native-tls-0.2.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-security-framework-3.7.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-native-tls-0.2.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-security-framework-sys-2.17.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-native-tls-0.2.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tempfile-3.27.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-native-tls-0.2.18"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-bitflags-2.11.1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-ndk-0.8.0"
@@ -18755,7 +18126,7 @@
       "spdxElementId": "SPDXRef-Package-normpath-1.5.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.60.2",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-nu-ansi-term-0.50.3"
     },
@@ -19375,56 +18746,6 @@
       "spdxElementId": "SPDXRef-Package-open-5.3.5"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bitflags-2.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-0.10.80"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-cfg-if-1.0.4",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-0.10.80"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-foreign-types-0.3.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-0.10.80"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-0.10.80"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-openssl-macros-0.1.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-0.10.80"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-openssl-sys-0.9.116",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-0.10.80"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-proc-macro2-1.0.106",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-macros-0.1.1"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-quote-1.0.45",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-macros-0.1.1"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-syn-2.0.117",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-macros-0.1.1"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openssl-sys-0.9.116"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-orbclient-0.3.55"
@@ -19725,14 +19046,9 @@
       "spdxElementId": "SPDXRef-Package-proc-macro-crate-1.3.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-toml--datetime-0.6.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-proc-macro-crate-2.0.2"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-toml--edit-0.20.2",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-proc-macro-crate-2.0.2"
+      "spdxElementId": "SPDXRef-Package-proc-macro-crate-2.0.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-toml--edit-0.25.12-plus-spec-1.1.0",
@@ -20100,11 +19416,6 @@
       "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-encoding--rs-0.8.35",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-futures-channel-0.3.32",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
@@ -20116,11 +19427,6 @@
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-futures-util-0.3.32",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-h2-0.4.19",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
     },
@@ -20150,11 +19456,6 @@
       "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-hyper-tls-0.6.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-hyper-util-0.1.20",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
@@ -20166,16 +19467,6 @@
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-mime-0.3.17",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-native-tls-0.2.18",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
     },
@@ -20226,11 +19517,6 @@
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tokio-native-tls-0.3.1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-reqwest-0.12.28"
     },
@@ -20372,142 +19658,142 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-once--cell-1.21.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-3.1.3"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-macro-3.1.2",
+      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-macro-3.1.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-3.1.3"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-support-3.1.2",
+      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-support-3.1.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-smallvec-1.15.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-glob-0.3.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-once--cell-1.21.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-proc-macro2-1.0.106",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-quote-1.0.45",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.3"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-support-3.1.2",
+      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-support-3.1.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.150",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.3"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-serde--yml-0.0.11",
+      "relatedSpdxElement": "SPDXRef-Package-serde--yml-0.0.12",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-syn-2.0.117",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-macro-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-arc-swap-1.9.2",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-base62-2.2.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-globwalk-0.8.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-itertools-0.11.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-lazy--static-1.5.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-normpath-1.5.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-once--cell-1.21.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-proc-macro2-1.0.106",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-regex-1.12.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.150",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-serde--yml-0.0.11",
+      "relatedSpdxElement": "SPDXRef-Package-serde--yml-0.0.12",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-siphasher-1.0.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-toml-0.7.8",
+      "relatedSpdxElement": "SPDXRef-Package-toml-0.8.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-triomphe-0.1.16",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.2"
+      "spdxElementId": "SPDXRef-Package-rust-i18n-support-3.1.3"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
@@ -20560,7 +19846,7 @@
       "spdxElementId": "SPDXRef-Package-rustix-0.38.44"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.59.0",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.52.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-rustix-0.38.44"
     },
@@ -20585,7 +19871,7 @@
       "spdxElementId": "SPDXRef-Package-rustix-1.1.4"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.52.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-rustix-1.1.4"
     },
@@ -20650,11 +19936,6 @@
       "spdxElementId": "SPDXRef-Package-same-file-1.0.6"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-schannel-0.1.29"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-proc-macro2-1.0.106",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-scroll--derive-0.12.1"
@@ -20702,327 +19983,302 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-android--logger-0.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-chrono-0.4.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-oboe-0.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ringbuf-0.4.8",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-chat-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-chat-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-logic-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-logic-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-uniffi-0.28.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-android-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-chrono-0.4.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-eframe-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-reqwest-0.12.28",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-3.1.2",
+      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-3.1.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sdr-remote-theme-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.150",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-chat-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-chrono-0.4.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-cpal-0.15.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-eframe-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-env--logger-0.11.10",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-mcp2221-hal-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-mdns-sd-0.19.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-midir-0.10.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-open-5.3.5",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-reqwest-0.12.28",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ringbuf-0.4.8",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-3.1.2",
+      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-3.1.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rustfft-6.4.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-chat-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-chat-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sdr-remote-layout-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-logic-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-logic-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sdr-remote-theme-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.150",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tao-0.34.8",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-appender-0.2.5",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-windows-0.58.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-wry-0.54.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-client-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-audiopus-0.3.0-rc.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-base32-0.5.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-bytemuck-1.25.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-cpal-0.15.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-hkdf-0.12.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-hmac-0.12.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-num--enum-0.7.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand-0.8.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rubato-0.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sha2-0.10.9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-totp-lite-2.0.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-windows-0.58.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-core-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui-0.29.1",
@@ -21032,297 +20288,252 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-chrono-0.4.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ringbuf-0.4.8",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-quic-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-quic-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-logic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-bytes-1.11.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-quinn-0.11.9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rcgen-0.13.2",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rustls-0.23.45",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-quic-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-futures-util-0.3.32",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rustls-0.23.45",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-tungstenite-0.24.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-relay-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-bytemuck-1.25.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-chrono-0.4.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-cpal-0.15.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-eframe-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-env--logger-0.11.10",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-futures-util-0.3.32",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-mcp2221-hal-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-mdns-sd-0.19.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-qrcode-0.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-reqwest-0.12.28",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ringbuf-0.4.8",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-3.1.2",
+      "relatedSpdxElement": "SPDXRef-Package-rust-i18n-3.1.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rustfft-6.4.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-chat-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-chat-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-core-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sdr-remote-layout-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-quic-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-quic-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.0",
+      "relatedSpdxElement": "SPDXRef-Package-sdr-remote-relay-2.14.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sdr-remote-theme-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.150",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serialport-4.9.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-socket2-0.5.10",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-tungstenite-0.24.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-url-2.5.8",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-vrx-rs-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-windows-0.58.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.0"
+      "spdxElementId": "SPDXRef-Package-sdr-remote-server-2.14.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui-0.29.1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-sdr-remote-theme-0.1.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-bitflags-2.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-security-framework-3.7.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-foundation-0.10.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-security-framework-3.7.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-foundation-sys-0.8.7",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-security-framework-3.7.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-security-framework-3.7.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-security-framework-sys-2.17.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-security-framework-3.7.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-foundation-sys-0.8.7",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-security-framework-sys-2.17.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-security-framework-sys-2.17.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-bitflags-2.11.1",
@@ -21487,47 +20698,32 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-indexmap-2.14.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.11"
+      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.12"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-itoa-1.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.11"
+      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.12"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-libyml-0.0.4",
+      "relatedSpdxElement": "SPDXRef-Package-libyml-0.0.5",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.11"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.11"
+      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.12"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-memchr-2.8.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.11"
+      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.12"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ryu-1.0.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.11"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.150",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.11"
+      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.12"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.11"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tempfile-3.27.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.11"
+      "spdxElementId": "SPDXRef-Package-serde--yml-0.0.12"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--core-1.0.228",
@@ -21880,7 +21076,7 @@
       "spdxElementId": "SPDXRef-Package-socket2-0.6.4"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.60.2",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-socket2-0.6.4"
     },
@@ -22010,181 +21206,6 @@
       "spdxElementId": "SPDXRef-Package-synstructure-0.13.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bitflags-2.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-system-configuration-0.7.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-foundation-0.9.4",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-system-configuration-0.7.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-system-configuration-sys-0.6.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-system-configuration-0.7.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-foundation-sys-0.8.7",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-system-configuration-sys-0.6.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-system-configuration-sys-0.6.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-bitflags-2.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-block2-0.6.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-foundation-0.10.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-core-graphics-0.25.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-crossbeam-channel-0.5.15",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-dispatch2-0.3.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-dlopen2-0.8.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-dpi-0.1.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-gdkwayland-sys-0.18.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-gdkx11-sys-0.18.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-gtk-0.18.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-jni-0.21.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-log-0.4.30",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-ndk-0.9.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-ndk-context-0.1.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-ndk-sys-0.6.0-plus-11769913",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-objc2-0.6.4",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-objc2-app-kit-0.3.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-objc2-foundation-0.3.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-once--cell-1.21.4",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-parking--lot-0.12.5",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-raw-window-handle-0.6.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tao-macros-0.1.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-unicode-segmentation-1.13.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-url-2.5.8",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-windows-0.61.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-windows-core-0.61.2",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-windows-version-0.1.7",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-x11-dl-2.21.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tao-0.34.8"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-proc-macro2-1.0.106",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-tao-macros-0.1.3"
@@ -22220,7 +21241,7 @@
       "spdxElementId": "SPDXRef-Package-tempfile-3.27.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.52.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-tempfile-3.27.0"
     },
@@ -22565,16 +21586,6 @@
       "spdxElementId": "SPDXRef-Package-tokio-macros-2.7.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-native-tls-0.2.18",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tokio-native-tls-0.3.1"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tokio-native-tls-0.3.1"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-rustls-0.23.45",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-tokio-rustls-0.26.4"
@@ -22625,34 +21636,9 @@
       "spdxElementId": "SPDXRef-Package-tokio-tungstenite-0.24.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bytes-1.11.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tokio-util-0.7.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-futures-core-0.3.32",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tokio-util-0.7.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-futures-sink-0.3.32",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tokio-util-0.7.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-pin-project-lite-0.2.17",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tokio-util-0.7.18"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-tokio-util-0.7.18"
-    },
-    {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-toml--datetime-0.6.3"
+      "spdxElementId": "SPDXRef-Package-toml--datetime-0.6.11"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--core-1.0.228",
@@ -22665,17 +21651,7 @@
       "spdxElementId": "SPDXRef-Package-toml--edit-0.19.15"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-serde--spanned-0.6.9",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-toml--edit-0.19.15"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-toml--edit-0.19.15"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-toml--datetime-0.6.3",
+      "relatedSpdxElement": "SPDXRef-Package-toml--datetime-0.6.11",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-toml--edit-0.19.15"
     },
@@ -22690,17 +21666,7 @@
       "spdxElementId": "SPDXRef-Package-toml--edit-0.20.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-serde--spanned-0.6.9",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-toml--edit-0.20.2"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-toml--edit-0.20.2"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-toml--datetime-0.6.3",
+      "relatedSpdxElement": "SPDXRef-Package-toml--datetime-0.6.11",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-toml--edit-0.20.2"
     },
@@ -22708,6 +21674,36 @@
       "relatedSpdxElement": "SPDXRef-Package-winnow-0.5.40",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-toml--edit-0.20.2"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-indexmap-2.14.0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-toml--edit-0.22.27"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-serde--spanned-0.6.9",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-toml--edit-0.22.27"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-toml--edit-0.22.27"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-toml--datetime-0.6.11",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-toml--edit-0.22.27"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-toml--write-0.1.2",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-toml--edit-0.22.27"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-winnow-0.7.15",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-toml--edit-0.22.27"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-indexmap-2.14.0",
@@ -22742,22 +21738,22 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--spanned-0.6.9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-toml-0.7.8"
+      "spdxElementId": "SPDXRef-Package-toml-0.8.23"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-toml-0.7.8"
+      "spdxElementId": "SPDXRef-Package-toml-0.8.23"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-toml--datetime-0.6.3",
+      "relatedSpdxElement": "SPDXRef-Package-toml--datetime-0.6.11",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-toml-0.7.8"
+      "spdxElementId": "SPDXRef-Package-toml-0.8.23"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-toml--edit-0.19.15",
+      "relatedSpdxElement": "SPDXRef-Package-toml--edit-0.22.27",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-toml-0.7.8"
+      "spdxElementId": "SPDXRef-Package-toml-0.8.23"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-digest-0.10.7",
@@ -23130,7 +22126,7 @@
       "spdxElementId": "SPDXRef-Package-uds--windows-1.2.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.60.2",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-uds--windows-1.2.1"
     },
@@ -24450,7 +23446,7 @@
       "spdxElementId": "SPDXRef-Package-winapi-0.3.9"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.61.2",
+      "relatedSpdxElement": "SPDXRef-Package-windows-sys-0.52.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-winapi-util-0.1.11"
     },
@@ -24748,21 +23744,6 @@
       "relatedSpdxElement": "SPDXRef-Package-windows-link-0.1.3",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-windows-numerics-0.2.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-windows-link-0.2.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-windows-registry-0.6.1"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-windows-result-0.4.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-windows-registry-0.6.1"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-windows-strings-0.5.1",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-windows-registry-0.6.1"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-windows-targets-0.52.6",
@@ -25178,6 +24159,11 @@
       "relatedSpdxElement": "SPDXRef-Package-memchr-2.8.1",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-winnow-0.5.40"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-memchr-2.8.1",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-winnow-0.7.15"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-memchr-2.8.1",

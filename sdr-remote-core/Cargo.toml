@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 audiopus = { workspace = true }
-bytemuck = { workspace = true }
 log = { workspace = true }
 anyhow = { workspace = true }
 # The one anti-alias filter for every downsampler (`resample.rs`, build 259); already

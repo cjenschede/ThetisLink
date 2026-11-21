@@ -762,10 +762,28 @@ fn write_loop<W: Write>(
 mod tests {
     use super::*;
 
-    fn tmp_dir(name: &str) -> PathBuf {
+    /// A folder in the temp folder for one test, removed when the test ends,
+    /// also when it fails. The name carries the process id, so a folder left
+    /// behind is never cleared by a later run.
+    struct TmpDir(PathBuf);
+
+    impl std::ops::Deref for TmpDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tmp_dir(name: &str) -> TmpDir {
         let d = std::env::temp_dir().join(format!("tl-measure-test-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
-        d
+        TmpDir(d)
     }
 
     /// The engine hands the stereo flag to `ring_ms` and starts a burst at every
@@ -911,7 +929,6 @@ mod tests {
         assert!(lines[1].ends_with(",2000,ring,,40,40,1,0"), "{lines:?}");
         assert!(lines[2].ends_with(",3020,ring,,65535,65535,0,0"), "{lines:?}");
         assert!(lines.iter().all(|l| l.split(',').count() == 8));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -948,7 +965,6 @@ mod tests {
         assert!(lines.iter().any(|l| l.ends_with(",115,session_start,quic,,,,")), "{lines:?}");
         assert!(lines.iter().any(|l| l.contains(",120,session_end,")), "{lines:?}");
         assert!(lines.last().unwrap().contains(",stop,"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The wall clock of a line is the engine clock plus the offset taken once at
@@ -971,7 +987,6 @@ mod tests {
         assert_eq!(walls[1] - walls[0], 1_000);
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
         assert!((walls[0] - 5_000 - now).abs() < 60_000, "anchored on today's wall clock");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A full ring drops and counts, and the count is in the file.
@@ -988,7 +1003,6 @@ mod tests {
         r.stop(start);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("# dropped "), "a hole in the measurement is said");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Starting again closes the first file and opens a second one.
@@ -1011,7 +1025,6 @@ mod tests {
         assert_ne!(a, b);
         assert!(std::fs::read_to_string(&a).unwrap().lines().last().unwrap().contains(",stop,"));
         assert!(std::fs::read_to_string(&b).unwrap().lines().last().unwrap().contains(",stop,"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Stopping wakes the writer instead of waiting out its pause: the engine's
@@ -1028,7 +1041,6 @@ mod tests {
         r.stop(start);
         let took = t.elapsed();
         assert!(took < Duration::from_millis(50), "stop held the caller for {took:?}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     struct FailingSink;
@@ -1129,7 +1141,6 @@ mod tests {
         assert_eq!(r.take_failure(), Some(path));
         assert!(!r.is_on());
         assert_eq!(r.take_failure(), None);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The phone's network and position lines (build 181): the header's eight
@@ -1236,7 +1247,6 @@ mod tests {
         ] {
             assert!(lines.iter().any(|l| l.ends_with(want)), "{want}: {lines:?}");
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A PTT edge is written for each transmitter that changed, and only then.
@@ -1256,6 +1266,5 @@ mod tests {
         let ptt: Vec<&str> = text.lines().filter(|l| l.contains(",ptt,")).collect();
         assert_eq!(ptt.len(), 2, "{ptt:?}");
         assert!(ptt[0].ends_with(",1,ptt,thetis,1,,,") && ptt[1].ends_with(",3,ptt,thetis,0,,,"), "{ptt:?}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

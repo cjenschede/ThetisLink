@@ -194,29 +194,131 @@ pub fn run(rx: Receiver<ChatCommand>, tx: Sender<ChatEvent>) {
         }
     };
 
-    let mut ticket: Option<String> = None;
-    let mut base: Option<String> = None;
+    let mut session = Session::default();
 
     while let Ok(cmd) = rx.recv() {
-        match cmd {
-            ChatCommand::Ticket(t) => ticket = t,
-            ChatCommand::Endpoint(b) => base = b,
-            other => {
-                let (Some(b), Some(t)) = (base.as_deref(), ticket.as_deref()) else {
-                    // Which of the two is missing decides what the window says.
-                    let why = if base.is_none() {
-                        OfflineReason::NoRelay
-                    } else {
-                        OfflineReason::NoTicket
-                    };
-                    let _ = tx.send(ChatEvent::Offline(why));
-                    continue;
-                };
-                let event = perform(&client, b, t, &other);
-                let _ = tx.send(event);
-            }
+        if let Some(request) = session.take(cmd) {
+            let _ = tx.send(session.request(&client, &request));
         }
     }
+}
+
+/// What the worker knows between commands: where the chat is, the ticket it
+/// asks with, and what the log has said about failures.
+#[derive(Default)]
+struct Session {
+    ticket: Option<String>,
+    base: Option<String>,
+    failures: FailureLog,
+}
+
+impl Session {
+    /// Takes in a ticket or an endpoint; any other command is handed back to
+    /// be performed.
+    ///
+    /// Both are sent again on every tick; only a different one counts. The
+    /// relay hands out a new ticket at every sign-in and every rotation, so a
+    /// new ticket is the same relay: the first failure in the new session is
+    /// said again, and the recovery still is. A new endpoint is another relay,
+    /// and the old outage is not its news.
+    fn take(&mut self, cmd: ChatCommand) -> Option<ChatCommand> {
+        match cmd {
+            ChatCommand::Ticket(t) => {
+                if t != self.ticket {
+                    self.failures.new_ticket();
+                }
+                self.ticket = t;
+                None
+            }
+            ChatCommand::Endpoint(b) => {
+                if b != self.base {
+                    self.failures = FailureLog::default();
+                }
+                self.base = b;
+                None
+            }
+            other => Some(other),
+        }
+    }
+
+    /// Performs a request with what the session holds, its failure log
+    /// included: one log across every poll is what lets an outage be said once
+    /// and its recovery after it.
+    fn request(&mut self, client: &reqwest::blocking::Client, cmd: &ChatCommand) -> ChatEvent {
+        let (Some(base), Some(ticket)) = (self.base.as_deref(), self.ticket.as_deref()) else {
+            // Which of the two is missing decides what the window says.
+            let why = if self.base.is_none() {
+                OfflineReason::NoRelay
+            } else {
+                OfflineReason::NoTicket
+            };
+            return ChatEvent::Offline(why);
+        };
+        perform(client, base, ticket, cmd, &mut self.failures)
+    }
+}
+
+/// Says in the log why a request failed, without filling it: the window
+/// polls every few seconds, and a network that is down fails every one of
+/// them. A reason is said once, again when it changes, and again after the
+/// service has answered in between, or a new relay or ticket came in. The
+/// recovery is said once per outage that was said.
+///
+/// The window shows a failed request as offline, the same as a dead
+/// network. This is where the two can still be told apart - a TLS handshake
+/// that is refused reads differently from a connection that is refused.
+#[derive(Default)]
+struct FailureLog {
+    /// The reason said last, so the same one is not said again.
+    last: Option<String>,
+    /// An outage was said and no answer has come since.
+    outage: bool,
+}
+
+impl FailureLog {
+    /// Returns whether the reason was said.
+    fn failed(&mut self, why: String) -> bool {
+        if self.last.as_deref() == Some(why.as_str()) {
+            return false;
+        }
+        log::warn!("chat: request failed ({why})");
+        self.last = Some(why);
+        self.outage = true;
+        true
+    }
+
+    /// A new ticket from the same relay: the reason may be said again, the
+    /// outage stays open until an answer comes.
+    fn new_ticket(&mut self) {
+        self.last = None;
+    }
+
+    /// Any answer counts, also a refusal: the status is in the line, so a
+    /// proxy that answers 502 for a chat that is down does not read as a
+    /// recovered service.
+    /// Returns whether the recovery was said.
+    fn answered(&mut self, status: reqwest::StatusCode) -> bool {
+        self.last = None;
+        if !std::mem::take(&mut self.outage) {
+            return false;
+        }
+        log::info!("chat: the service answers again (HTTP {})", status.as_u16());
+        true
+    }
+}
+
+/// The error with its causes, without the URL: the URL carries the poll
+/// position, so with it every failure would read as a new reason.
+fn failure_reason(e: reqwest::Error) -> String {
+    let e = e.without_url();
+    let mut why = e.to_string();
+    let mut source = std::error::Error::source(&e);
+    while let Some(cause) = source {
+        why.push_str(": ");
+        why.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    why
 }
 
 fn perform(
@@ -224,6 +326,7 @@ fn perform(
     base: &str,
     ticket: &str,
     cmd: &ChatCommand,
+    failures: &mut FailureLog,
 ) -> ChatEvent {
     let auth = format!("Bearer {ticket}");
     let result = match cmd {
@@ -298,8 +401,12 @@ fn perform(
     let resp = match result {
         Ok(r) => r,
         // Allowed to be down; the window says which kind of quiet this is.
-        Err(_) => return ChatEvent::Offline(OfflineReason::Unreachable),
+        Err(e) => {
+            failures.failed(failure_reason(e));
+            return ChatEvent::Offline(OfflineReason::Unreachable);
+        }
     };
+    failures.answered(resp.status());
 
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
@@ -493,7 +600,7 @@ mod tests {
     #[test]
     fn a_successful_dismiss_does_not_pass_for_a_state() {
         let (base, _rx) = fake_service("200 OK", DISMISS_OK);
-        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
+        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 }, &mut FailureLog::default());
         // Positively, not as a denial. "Not a State" was also satisfied by
         // Failed - the earlier fault, a dismiss shown as a red failure line -
         // and by Answers(vec![]), which would wipe every answer off the
@@ -510,7 +617,7 @@ mod tests {
     #[test]
     fn an_older_service_saying_404_is_quiet() {
         let (base, _rx) = fake_service("404 Not Found", r#"{"error":"not found"}"#);
-        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
+        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 }, &mut FailureLog::default());
         assert!(
             matches!(evt, ChatEvent::NoChange),
             "the fallback is meant to be quiet and do nothing else: {evt:?}"
@@ -523,7 +630,7 @@ mod tests {
     #[test]
     fn a_refused_ticket_is_not_swallowed() {
         let (base, _rx) = fake_service("401 Unauthorized", r#"{"error":"no"}"#);
-        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
+        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 }, &mut FailureLog::default());
         // Positively: "not NoChange" was also satisfied by Offline, and then a
         // refused ticket would reach the reader as "the network is down".
         assert!(
@@ -543,11 +650,115 @@ mod tests {
             l.local_addr().unwrap().port()
         };
         let base = format!("http://127.0.0.1:{port}");
-        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 });
+        let evt = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 2 }, &mut FailureLog::default());
         assert!(
             matches!(evt, ChatEvent::Offline(_)),
             "a dead network is not a silence to hide: {evt:?}"
         );
+    }
+
+    /// A network that stays down fails every poll; the log says it once. A
+    /// different reason, or the same one after the service answered, is said
+    /// again - otherwise the second outage would be silent.
+    #[test]
+    fn a_failure_is_said_once_until_something_changes() {
+        let mut log = FailureLog::default();
+        assert!(log.failed("refused".into()), "the first failure is said");
+        assert!(!log.failed("refused".into()), "the same failure on the next poll is not");
+        assert!(log.failed("handshake".into()), "a different reason is said");
+        log.answered(reqwest::StatusCode::OK);
+        assert!(log.failed("handshake".into()), "after an answer, the same reason is said again");
+    }
+
+    /// The poll position is in the URL; without stripping it, every poll of a
+    /// dead network would be a new reason and the log would fill after all.
+    #[test]
+    fn two_polls_of_a_dead_network_give_one_reason() {
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let base = format!("http://127.0.0.1:{port}");
+        let mut log = FailureLog::default();
+        let first = perform(&client(), &base, "t", &ChatCommand::Poll { since: 1 }, &mut log);
+        let said = log.last.clone();
+        let second = perform(&client(), &base, "t", &ChatCommand::Poll { since: 2 }, &mut log);
+        assert!(matches!(first, ChatEvent::Offline(_)) && matches!(second, ChatEvent::Offline(_)));
+        assert!(said.is_some(), "the failure was noted");
+        assert_eq!(log.last, said, "the second poll reads as the same reason");
+        assert!(!said.unwrap().contains(&port.to_string()), "the reason carries no URL");
+    }
+
+    /// The relay signs in again within a second of the network coming back,
+    /// with a new ticket. That must not swallow the recovery line: the reason
+    /// is forgotten, the outage is not.
+    #[test]
+    fn a_new_ticket_keeps_the_outage_open() {
+        let mut log = FailureLog::default();
+        assert!(log.failed("refused".into()));
+        log.new_ticket();
+        assert!(log.failed("refused".into()), "in the new session the failure is said again");
+        log.new_ticket();
+        assert!(log.answered(reqwest::StatusCode::OK), "the recovery is said after a new ticket");
+        assert!(!log.answered(reqwest::StatusCode::OK), "and only once");
+        assert!(!FailureLog::default().answered(reqwest::StatusCode::OK), "no outage, no recovery line");
+    }
+
+    /// The relay signs in again with a new ticket when the network comes
+    /// back; the outage said before it must still get its recovery line. Only
+    /// another endpoint - another relay - forgets it. This is the choice the
+    /// loop makes, pinned where the loop makes it.
+    #[test]
+    fn a_new_ticket_keeps_the_outage_and_a_new_relay_drops_it() {
+        let mut s = Session::default();
+        assert!(s.take(ChatCommand::Endpoint(Some("https://relay.example/chat".into()))).is_none());
+        assert!(s.take(ChatCommand::Ticket(Some("first".into()))).is_none());
+        assert!(s.failures.failed("refused".into()));
+        // Sent again unchanged on every tick: nothing is forgotten.
+        let _ = s.take(ChatCommand::Ticket(Some("first".into())));
+        assert!(!s.failures.failed("refused".into()), "the same ticket is not a new session");
+        let _ = s.take(ChatCommand::Ticket(Some("second".into())));
+        assert!(s.failures.outage, "a new ticket from the same relay keeps the outage open");
+        let _ = s.take(ChatCommand::Endpoint(Some("https://relay.example/chat".into())));
+        assert!(s.failures.outage, "the same endpoint sent again forgets nothing");
+        assert!(s.failures.failed("refused".into()), "and says the failure again");
+        let _ = s.take(ChatCommand::Endpoint(Some("https://other.example/chat".into())));
+        assert!(!s.failures.outage, "another relay is not told about the old outage");
+        assert!(matches!(s.take(ChatCommand::Answers), Some(ChatCommand::Answers)), "a request is handed back");
+    }
+
+    /// A request goes through the session's own failure log, and without a
+    /// relay or a ticket it says which of the two is missing.
+    #[test]
+    fn a_request_uses_the_sessions_log_and_names_what_is_missing() {
+        let mut s = Session::default();
+        assert!(matches!(s.request(&client(), &ChatCommand::Answers), ChatEvent::Offline(OfflineReason::NoRelay)));
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let _ = s.take(ChatCommand::Endpoint(Some(format!("http://127.0.0.1:{port}"))));
+        assert!(matches!(s.request(&client(), &ChatCommand::Answers), ChatEvent::Offline(OfflineReason::NoTicket)));
+        let _ = s.take(ChatCommand::Ticket(Some("t".into())));
+        let _ = s.request(&client(), &ChatCommand::Poll { since: 1 });
+        assert!(s.failures.outage, "the failure landed in the session's log, not in a fresh one");
+    }
+
+    /// The recovery has to be wired into perform, not only into FailureLog:
+    /// without it the first outage is said and every later one is silent.
+    #[test]
+    fn an_answer_after_a_failure_clears_the_failure() {
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let dead = format!("http://127.0.0.1:{port}");
+        let mut log = FailureLog::default();
+        let _ = perform(&client(), &dead, "t", &ChatCommand::Poll { since: 1 }, &mut log);
+        assert!(log.last.is_some(), "the failure was noted");
+        let (alive, _rx) = fake_service("404 Not Found", r#"{"error":"not found"}"#);
+        let _ = perform(&client(), &alive, "t", &ChatCommand::Poll { since: 1 }, &mut log);
+        assert!(log.last.is_none(), "any answer, also a 404, clears it");
     }
 
     /// The tolerance is for one command, not for the service being flaky. A 404
@@ -556,7 +767,7 @@ mod tests {
     #[test]
     fn a_404_on_another_command_is_not_swallowed() {
         let (base, _rx) = fake_service("404 Not Found", r#"{"error":"not found"}"#);
-        let evt = perform(&client(), &base, "t", &ChatCommand::Answers);
+        let evt = perform(&client(), &base, "t", &ChatCommand::Answers, &mut FailureLog::default());
         assert!(
             !matches!(evt, ChatEvent::NoChange),
             "only a dismiss may swallow a 404: {evt:?}"
@@ -568,7 +779,7 @@ mod tests {
     #[test]
     fn the_request_is_a_post_to_the_dismiss_path_with_the_id() {
         let (base, rx) = fake_service("200 OK", DISMISS_OK);
-        let _ = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 7 });
+        let _ = perform(&client(), &base, "t", &ChatCommand::DismissAnswer { id: 7 }, &mut FailureLog::default());
         let sent = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("a request");
         assert!(sent.starts_with("POST /reply/dismiss "), "methode en pad: {sent}");
         assert!(sent.contains(r#"{"id":7}"#), "body: {sent}");

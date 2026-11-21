@@ -1561,7 +1561,7 @@ impl eframe::App for SdrRemoteApp {
                         ui.label(RichText::new(rust_i18n::t!("main_about_protocols").to_string()).size(13.0).strong());
                         ui.label("TCI: Expert Electronics / Thetis");
                         ui.label("DX Spider: DX cluster telnet protocol");
-                        ui.label("WebSDR (PA3FWM) / KiwiSDR: CatSync targets");
+                        ui.label("WebSDR (PA3FWM) / KiwiSDR: CatSync targets (Windows, macOS)");
                         ui.label("ThetisLink Relay: self-hosted WebSocket + UDP relay (internet remote)");
                         ui.label("ThetisLink Chat: optional service beside a relay (chat + problem reports)");
 
@@ -1606,7 +1606,7 @@ impl eframe::App for SdrRemoteApp {
                             ("quinn", "QUIC connection"),
                             ("rustls", "TLS 1.3 under QUIC and for wss"),
                             ("midir", "MIDI controller"),
-                            ("wry", "WebView (CatSync)"),
+                            ("wry", "WebView (CatSync, Windows)"),
                         ];
                         egui::Grid::new("lib_grid").num_columns(2).spacing([12.0, 1.0]).show(ui, |ui| {
                             for (lib, purpose) in libs {

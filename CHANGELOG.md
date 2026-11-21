@@ -14,6 +14,58 @@ hardware notes, see `Technical-Reference.md` and `User-Manual-EN.md`
 
 ---
 
+## [2.14.1] 2026-11-21 (ThetisLink for Linux as a download, for a PC and for a Raspberry Pi)
+
+> **Who this release changes things for.** **Anyone who wants ThetisLink on Linux**: the
+> server and the desktop client now come as a ready package, for x86_64 PCs and for 64-bit
+> ARM such as a Raspberry Pi, with no Rust or build tools needed. **Anyone with an SPE
+> amplifier on a Linux server**: switching it on from ThetisLink now works there too.
+> On Windows and Android little changes: the chat checks its https against a built-in list
+> of root certificates instead of the Windows certificate store (see Other), the about screens
+> no longer name CatSync where it does not run, and a chat request that fails is logged once
+> with its cause.
+>
+> **Works with 2.14.0, 2.13.1 and 2.13.2, in both directions.** Nothing changed in what
+> travels between the programs, so you can update one program at a time.
+>
+> **Thetis.** Unchanged: stock Thetis v2.10.3.15 suffices, and the fork **PA3GHM TL2-18**
+> still applies.
+>
+> **Going back to 2.14.0 works.** No new settings are written.
+
+### Linux (in development)
+- Two packages beside the ZIP on the Releases page:
+  `ThetisLink-2.14.1-linux-x86_64.tar.gz` for a PC and
+  `ThetisLink-2.14.1-linux-aarch64.tar.gz` for 64-bit ARM such as a Raspberry Pi. Each
+  holds the server, the desktop client, a `README.txt` with what the system needs, and the
+  licence files. They need glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Raspberry Pi OS 12
+  (64-bit) or newer. The installation guide (2.9) says how to start them.
+- The programs no longer need OpenSSL, GTK or WebKitGTK on Linux: https goes through
+  rustls, and the embedded web view is for Windows only (on Linux the WebSDR opens in the
+  browser, as before).
+- Every package comes out the same, byte for byte, when it is built again, also on a
+  GitHub machine and from the public source: anyone can check that the download is the
+  published code.
+- An SPE amplifier on a Linux server switches on. Linux raises DTR when it opens a serial
+  port, and the amplifier answers the RTS pulse only with DTR low; the server sets DTR
+  low after RTS low, before the pulse.
+- On Linux the server still works together with hpsdr-rs; both are in development and the
+  basics work, as in 2.14.0.
+
+### Other
+- On Windows the chat now checks the certificate of its https connection against the root
+  certificates built into ThetisLink (the Mozilla list), and no longer against the Windows certificate store. Behind a network that opens https
+  with a root certificate of its own (some company proxies) the chat then does not connect.
+- The third-party licence list now carries the licence text of the hidapi crate, which was
+  missing, also in earlier releases.
+- A chat request that fails is logged once with its cause, and a line follows when it
+  works again.
+- `SHA256SUMS.txt` in the ZIP also lists the two Linux packages. Checking only the ZIP:
+  `sha256sum -c --ignore-missing SHA256SUMS.txt`; the PowerShell check in the installation
+  guide then reports the two packages as `MISSING`, which is expected.
+
+---
+
 ## [2.14.0] 2026-11-14 (A TUNE that goes off with its client, the volume on Thetis's own scale, and ThetisLink on Linux)
 
 > **Who this release changes things for.** **Anyone who tunes from the desktop or the

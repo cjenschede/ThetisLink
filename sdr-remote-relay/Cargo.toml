@@ -14,8 +14,11 @@ tokio-tungstenite = { version = "0.24", features = ["connect", "rustls-tls-webpk
 # tokio-tungstenite does NOT enable a rustls crypto provider, so rustls 0.23 panics
 # ("no process-level CryptoProvider") on the first wss connect. Enable the `ring`
 # provider explicitly (default-features off avoids also pulling aws-lc-rs, which would
-# make it ambiguous). `ring` cross-compiles cleanly to Android.
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# make it ambiguous). `ring` cross-compiles cleanly to Android. `tls12` said here:
+# without it the wss sign-in could speak TLS 1.2 only because another crate in the
+# same build (hyper-rustls, through the chat) happened to switch it on. `std` as
+# in sdr-remote-quic, for the same reason: here it came from tokio-rustls.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 # Test certificates for the wss:// trust test (already in the tree via sdr-remote-quic).

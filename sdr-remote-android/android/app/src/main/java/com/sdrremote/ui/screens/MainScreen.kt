@@ -648,7 +648,6 @@ fun MainScreen(viewModel: SdrViewModel = viewModel()) {
                     Text(stringResource(R.string.main_about_protocols), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Text("TCI: Expert Electronics / Thetis", fontSize = 11.sp)
                     Text("DX Spider: DX cluster", fontSize = 11.sp)
-                    Text("WebSDR (PA3FWM) / KiwiSDR: CatSync", fontSize = 11.sp)
                     Text("ThetisLink Relay: WS + UDP (internet remote)", fontSize = 11.sp)
                     Text("ThetisLink Chat: optional service beside a relay", fontSize = 11.sp)
                     Spacer(Modifier.height(6.dp))

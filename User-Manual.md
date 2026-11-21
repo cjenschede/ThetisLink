@@ -1,4 +1,4 @@
-﻿# ThetisLink v2.14.0: Gebruikershandleiding
+﻿# ThetisLink v2.14.1: Gebruikershandleiding
 
 ## Inhoudsopgave
 
@@ -42,13 +42,13 @@ Optioneel is er de **PA3GHM Thetis fork** met ThetisLink-specifieke uitbreidinge
 
 ### Distributie
 
-ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
+ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud (de twee Linux-pakketten zijn aparte downloads ernaast, zie de installatiehandleiding):
 
 | Bestand | Beschrijving |
 |---------|-------------|
 | `ThetisLink-Server.exe` | Server executable (Windows) |
 | `ThetisLink-Client.exe` | Desktop client executable |
-| `ThetisLink-2.14.0.apk` | Android client app |
+| `ThetisLink-2.14.1.apk` | Android client app |
 | `Installatie.md`, `Installatie.pdf` | Installatiehandleiding (Nederlands) |
 | `User-Manual.md`, `User-Manual.pdf` | Gebruikershandleiding (Nederlands, dit document) |
 | `Technische-Referentie.md`, `Technische-Referentie.pdf` | Technische referentie (Nederlands) |
@@ -60,7 +60,7 @@ ThetisLink wordt gedistribueerd als een zip bestand met de volgende inhoud:
 | `Apache-2.0.txt`, `OFL-1.1-Source-Code-Pro.txt` | Licenties van de twee lettertypen in de PDF's en van de bibliotheken in de APK |
 | `libopus-BSD-3-Clause.txt` | Licentie van de Opus-codec (libopus) die in alle drie de programma's zit |
 | `UFL-1.0.txt`, `Hack-Regular.txt`, `emoji-icon-font-MIT.txt` | Licenties van de lettertypen in de server en de desktopclient |
-| `WebView2-SDK.txt` | Licentie van de WebView2-loader in de desktopclient |
+| `WebView2-SDK.txt` | Licentie van de WebView2-loader in de Windows-desktopclient |
 | `sbom.spdx.json`, `THIRD-PARTY-LICENSES.html` | De onderdelen van de programma's (SBOM) en de licentieteksten van de Rust-bibliotheken |
 | `NOTICE.md`, `ATTRIBUTION.md` | Licentie- en bronvermeldingen |
 | `thetislink-relay-source.tar.gz` | Broncode van de relay-server |
@@ -616,7 +616,9 @@ Eén schakelaar in de client zet de **RX-audiobandbreedte** voor de Thetis-ontva
 
 ### WebSDR/KiwiSDR (Desktop)
 
-Ingebouwde WebView voor WebSDR en KiwiSDR ontvangst:
+Ingebouwde WebView voor WebSDR en KiwiSDR ontvangst (Windows). Op macOS opent de WebSDR in Safari, dat ThetisLink
+bedient met AppleScript (daarvoor moet in Safari onder Develop "Allow JavaScript from Apple Events" aan staan); op
+Linux in de browser, zonder frequentiesynchronisatie en muten:
 - Frequentie synchronisatie: WebSDR volgt de VFO
 - Automatisch muten tijdens zenden
 - Favorietenlijst met ster-icoon
@@ -1440,6 +1442,7 @@ Als het spectrum (lijn) en de waterval niet synchroon lopen bij het pannen, hers
 
 | Versie | Hoogtepunten |
 |---|---|
+| **2.14.1** | **ThetisLink voor Linux als download, voor een pc en voor een Raspberry Pi.** De server en de desktopclient komen als kant-en-klaar pakket voor x86_64 en voor 64-bit ARM (glibc 2.35 of nieuwer), naast de ZIP; geen bouwgereedschap nodig. Een SPE-versterker aan een Linux-server gaat aan. Niets veranderd op de draad; werkt met 2.14.0, 2.13.1 en 2.13.2. |
 | **2.14.0** | **Een TUNE die met zijn client uitgaat, het volume op de schaal van Thetis, en ThetisLink op Linux.** Een TUNE die je vanaf een client start, gaat uit als die client weggaat; de TUNE-knop toont op desktop en telefoon wat Thetis doet. Het volume is de stand van Thetis: 50 % in de client is 50 in Thetis, en elk scherm volgt ook 0 %. Op de telefoon gaat een schuif na het loslaten terug naar wat de radio of de PA vasthoudt. Een Yaesu die na de server aangaat, hapert niet meer. De server en de desktopclient zijn op Linux te bouwen; de server werkt daar samen met hpsdr-rs, beide nog in ontwikkeling (zie de installatiehandleiding). Werkt met 2.13.1 en 2.13.2 in beide richtingen. |
 | **2.13.2** | **Het zendspectrum van een Yaesu, een tuner die zegt dat hij niet tunede, en seriële apparaten die terugkomen.** De desktopclient toont in de EQ-sectie van een Yaesu het zendspectrum: wat de encoder werkelijk verstuurt, live en als gemiddelde van de laatste doorgang, met de EQ-curve erover. Een StockCorner-tuner op een MCP2221A doet de eerste tune na het inschakelen goed, meldt een tune die niet tunede als mislukt (**Tuned below**, standaard 4,5 V, 0 = uit) en wordt niet ingedrukt als hij uit staat. De UltraBeam en de SPE Expert komen vanzelf terug na een opnieuw ingestoken USB-kabel, of als ze na de server worden aangezet. Werkt met 2.13.1, in beide richtingen. |
 | **2.13.1** | **Een rechtstreekse verbinding overleeft de relay, de zendgain staat in dB, en Windows heeft niets extra nodig.** Een verbinding die via de relay gevonden is en rechtstreeks loopt (D+R, L+R) loopt door als de relay wegvalt; de R wordt rood. Een Yaesu zendt met 120 ms voorsprong (was 80 ms). Geen Visual C++ Redistributable meer nodig. Eén server per pc; de server meldt zich pas bij de relay als hij zijn poort heeft. De server bewaart de log van de vorige run, en een probleemmelding neemt die mee. De zendgain staat in dB voorin de keten, met een begrenzer op -1 dB; een Yaesu-EQ-profiel of telefoonvoorinstelling draagt de mic-gain, compressor en AGC; een geavanceerde EQ met twintig kanalen op de desktop; een CLIP-lamp. Een Yaesu-opname krijgt de ontvangstcorrectie ook; een serverinstelling voor Yaesu-ontvangstniveaus ingesteld volgens de installatiegids (radio's en instelling pas als de server en elke client 2.13.1 zijn). De PDF-handleidingen zijn terug. Eén spectrumpaneel voor elk venster, een VRX-AGC die zijn ontvanger volgt, een veld Opvullen, een fijnere pan en VRX-breedte bij hoge zoom, en de FFT-grootte alleen van een client die kijkt (tot 512K). Werkt in beide richtingen met 2.13.0; stock Thetis v2.10.3.15 volstaat, de fork PA3GHM TL2-18 blijft gelden. |

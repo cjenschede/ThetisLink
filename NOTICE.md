@@ -68,7 +68,7 @@ cargo sees the crate, not the C library inside it.
 
 ## The fonts in the server and the desktop client
 
-The Windows programs draw with egui, whose crate `epaint_default_fonts` (0.29.1)
+The desktop programs (Windows and Linux) draw with egui, whose crate `epaint_default_fonts` (0.29.1)
 builds four fonts into them. The Rust licence of that crate (in
 `compliance/THIRD-PARTY-LICENSES.html`) is not the licence of the fonts:
 
@@ -84,11 +84,11 @@ builds four fonts into them. The Rust licence of that crate (in
 
 Each text is the file that comes with the font in the crate, unchanged.
 
-## The WebView2 loader in the desktop client
+## The WebView2 loader in the Windows desktop client
 
-The desktop client opens WebSDR and KiwiSDR pages in an embedded Edge WebView2
-(`wry`). The crate `webview2-com-sys` (0.38.2, MIT) links Microsoft's static
-WebView2 loader into the client, from the WebView2 SDK 1.0.3650.58. That loader is
+The Windows desktop client opens WebSDR and KiwiSDR pages in an embedded Edge WebView2
+(`wry`); the Linux and macOS clients do not contain it. The crate `webview2-com-sys` (0.38.2, MIT) links Microsoft's static
+WebView2 loader into the Windows client, from the WebView2 SDK 1.0.3650.58. That loader is
 Copyright (C) Microsoft Corporation, under the licence of the SDK, which allows
 redistribution in binary form with its notice: `compliance/licenses/WebView2-SDK.txt`,
 the `LICENSE.txt` of the NuGet package `Microsoft.Web.WebView2` 1.0.3650.58,

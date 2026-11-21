@@ -17,7 +17,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "2.14.0"
+version = "2.14.1"
 edition = "2021"
 license = "GPL-2.0-or-later"
 
@@ -29,8 +29,11 @@ rubato = "0.14"
 ringbuf = "0.4"
 eframe = "0.29"
 egui = "0.29"
-bytemuck = { version = "1", features = ["derive"] }
-log = "0.4"
+# "std" for log::set_boxed_logger, which the client, the server and the app
+# all call to put their own logger in place. Said here rather than left to a
+# dependency that happens to switch it on: serde_yml 0.0.11 did, 0.0.12 does
+# not, and the app stopped compiling (2.14.1-dev build 6).
+log = { version = "0.4", features = ["std"] }
 env_logger = "0.11"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-//! Embedded WebSDR/KiwiSDR window using wry WebView + tao window.
+//! WebSDR/KiwiSDR window.
 //!
-//! Cross-platform: uses tao for windowing (Win32/Cocoa/X11) and wry for WebView
-//! (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux).
+//! On Windows an own Win32 window with a wry WebView (WebView2) in it; macOS
+//! drives Safari, and Linux opens the system browser.
 //! Detects SDR type from URL and uses appropriate JS commands.
 //!
 //! Uses a manual poll loop instead of event_loop.run() to avoid process::exit()

@@ -1,26 +1,27 @@
 # ThetisLink
 
-> **Current release: [v2.14.0](https://github.com/cjenschede/ThetisLink/releases/tag/v2.14.0)**:
-> **A TUNE that goes off with its client, the volume on Thetis's own scale, and ThetisLink on
-> Linux.** A TUNE you start from a client goes off when that client leaves or loses its link, and
-> the TUNE button on desktop and phone shows what Thetis does. The receive volume is Thetis's own
-> setting: 50 % in the client is 50 in Thetis, a slider no longer jumps back a step, and 0 % is
-> followed on every screen. On a receive-only Amplitec position ThetisLink sends nothing that keys
-> the transmitter. A Yaesu switched on after the server no longer stutters. The server and the
-> desktop client also build from source on Linux, where the server works together with hpsdr-rs;
-> both are still in development and the basics work (no Linux download).
-> **Works with 2.13.1 and 2.13.2 in both directions**, so you can update one program at a time.
+> **Current release: [v2.14.1](https://github.com/cjenschede/ThetisLink/releases/tag/v2.14.1)**:
+> **ThetisLink for Linux as a download, for a PC and for a Raspberry Pi.** The server and the
+> desktop client now come as a ready package for x86_64 and for 64-bit ARM such as a Raspberry Pi
+> (glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Raspberry Pi OS 12 or newer). On Linux the server
+> works together with hpsdr-rs; both are still in development and the basics work. An SPE
+> amplifier on a Linux server now switches on too. On Windows and Android little changes (the about
+> screens, a chat failure logged once); 2.14.0 brought the TUNE that goes off with its client and the volume on Thetis's
+> own scale.
+> **Works with 2.14.0, 2.13.1 and 2.13.2 in both directions**, so you can update one program at a time.
 > Coming from 2.12 or older? Then update the server, the desktop client and the Android app
 > together: 2.13 does not talk to 2.12 (see the changelog for 2.13.0). Coming from 2.13.0? Read the
 > 2.13.1 notes on the receive levels first.
 > **Stock Thetis v2.10.3.15 suffices**; the Thetis fork **PA3GHM TL2-18** adds the extras listed
 > in the changelog.
-> Download `ThetisLink-2.14.0.zip` from the
+> Download `ThetisLink-2.14.1.zip` from the
 > [Releases page](https://github.com/cjenschede/ThetisLink/releases). The ZIP
 > contains both Windows binaries, the Android APK, all manuals,
 > `SHA256SUMS.txt` and the licence files (`LICENSE`, `NOTICE.md`, `ATTRIBUTION.md`, the SBOM, the
 > third-party licence list and the licence texts), which are also attached to the
-> release as separate downloads.
+> release as separate downloads. The two Linux packages
+> (`ThetisLink-2.14.1-linux-x86_64.tar.gz`, `ThetisLink-2.14.1-linux-aarch64.tar.gz`) are separate
+> downloads beside it.
 
 Remote control for Thetis over the network: audio, spectrum, PTT and full radio
 control via TCI WebSocket. ThetisLink talks to Thetis and never to the radio behind
@@ -33,8 +34,8 @@ USB audio, one model at a time, and are named individually below.
 
 ## Components
 
-- **ThetisLink Server**: runs on the Thetis PC (Windows), controls the radio via TCI; also builds from source on Linux, where it works together with hpsdr-rs (in development)
-- **ThetisLink Client**: desktop client (Windows binary; also builds from source on macOS, experimental, and on Linux, in development) with spectrum, waterfall and full control
+- **ThetisLink Server**: runs on the Thetis PC (Windows), controls the radio via TCI; also for Linux (x86_64 and Raspberry Pi), where it works together with hpsdr-rs (in development)
+- **ThetisLink Client**: desktop client (Windows and Linux, the Linux one in development; also builds from source on macOS, experimental) with spectrum, waterfall and full control
 - **ThetisLink Android**: mobile client app
 
 ## Features
@@ -49,7 +50,7 @@ USB audio, one model at a time, and are named individually below.
 - Up to two Yaesu radios (FT-991A and/or FTX-1, any mix) running in parallel as independent channels alongside the Thetis SDR: each with its own CAT COM port, USB audio, frequency, mode, PTT and memory channels (model auto-detected)
 - MIDI controller support (desktop + Android)
 - Bluetooth PTT on the phone, of two kinds. A **BLE transmit button** of the YPC21 / PTT-Z01 class is found, connected and reconnected by the app itself under **Settings > BT PTT button**: no pairing in the Android settings, it keeps working behind a locked screen because the button is in your hand, and a button that goes out of range releases the transmitter instead of leaving it keyed (Android 12 or newer). Shutter-style buttons (e.g. ZL-01), which present themselves as an external touch device, still work as they did: those need the screen awake
-- Embedded WebSDR / KiwiSDR panel with frequency sync and auto-mute on TX
+- Embedded WebSDR / KiwiSDR panel with frequency sync and auto-mute on TX (Windows)
 - DX Cluster with spectrum overlay
 - Mandatory password authentication, checked both ways and tied to the encrypted connection, with optional TOTP 2FA
 - Smart and Ultra diversity auto-null algorithms
